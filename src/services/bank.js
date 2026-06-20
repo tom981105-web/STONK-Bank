@@ -51,8 +51,20 @@ export const INVESTMENT_PRODUCTS = {
 // ───────────── v2.0: VIP ─────────────
 export const VIP_TIERS = ["NORMAL", "SILVER", "GOLD", "PLATINUM", "BLACK"];
 export const VIP_TIER_MIN = { NORMAL: 0, SILVER: 30, GOLD: 55, PLATINUM: 78, BLACK: 92 }; // vipScore 기준
-export const VIP_VAULT_RATE_DAY = 0.003;       // VIP 금고 이자: 하루 0.3% (자유 0.2% < VIP 0.3% < 정기)
+export const VIP_VAULT_RATE_DAY = 0.003;       // VIP 금고 기본 이자: 하루 0.3% (자유 0.2% < VIP 0.3% < 정기)
 export const VIP_VAULT_MIN_TIER = "GOLD";      // GOLD 이상부터 VIP 금고 사용 가능
+// 등급별 보험 가입비 할인 / VIP 금고 이자율(낮게 유지 — 돈복사 방지)
+export const VIP_DISCOUNT = { NORMAL: 0, SILVER: 0.03, GOLD: 0.05, PLATINUM: 0.08, BLACK: 0.10 };
+export const VIP_VAULT_RATE_BY_TIER = { NORMAL: 0, SILVER: 0, GOLD: 0.003, PLATINUM: 0.0035, BLACK: 0.004 };
+export function vipDiscount(tier) { return VIP_DISCOUNT[tier] || 0; }
+export function vipVaultRate(tier) { return VIP_VAULT_RATE_BY_TIER[tier] || 0; }
+export function vipRank(tier) { return Math.max(0, VIP_TIERS.indexOf(tier || "NORMAL")); }
+
+// VIP 전용 투자상품(기본 4종에 더해짐). requiredVipTier 이상에서만 가입 가능.
+export const VIP_INVESTMENT_PRODUCTS = {
+  pbond:  { id: "pbond",  title: "PLATINUM 안정 채권", ms: 24 * 3600 * 1000, min: -0.02, max: 0.04, risk: "낮음",     requiredVipTier: "PLATINUM" },
+  bsecret:{ id: "bsecret",title: "BLACK 시크릿 펀드",  ms: 48 * 3600 * 1000, min: -0.15, max: 0.20, risk: "매우 높음", requiredVipTier: "BLACK" },
+};
 
 // ── 숫자 방어 ──
 export function num(v) { const x = Number(v); return Number.isFinite(x) ? x : 0; }
@@ -67,6 +79,7 @@ const playerRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/players/${uid}`)
 const cashRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/players/${uid}/cash`);
 const bankRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}`);
 const txListRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}/tx`);
+const msgListRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}/messages`);
 
 // ── 기본 은행 데이터 ──
 export function defaultBank(now) {
@@ -131,10 +144,11 @@ export function settleInterest(bank, now) {
   const days = elapsed / 86400000;
   const freeInt = days > 0 ? Math.floor(num(bank.balance) * FREE_RATE_DAY * days) : 0;
   const loanInt = days > 0 ? Math.floor(num(bank.loanPrincipal) * LOAN_RATE_DAY * days) : 0;
-  // VIP 금고 이자(별도 시계)
+  // VIP 금고 이자(별도 시계, 등급별 이자율)
   const vlast = int(bank.lastVipSettledAt) || last;
   const vdays = Math.max(0, now - vlast) / 86400000;
-  const vipInt = vdays > 0 ? Math.floor(num(bank.vipVaultBalance) * VIP_VAULT_RATE_DAY * vdays) : 0;
+  const vrate = vipVaultRate(bank.vipTier) || VIP_VAULT_RATE_DAY;
+  const vipInt = vdays > 0 ? Math.floor(num(bank.vipVaultBalance) * vrate * vdays) : 0;
   const nb = { ...bank };
   if (freeInt > 0 || loanInt > 0) {
     nb.balance = Math.max(0, int(bank.balance) + freeInt);
@@ -179,14 +193,33 @@ export function txItem(type, title, amount, beforeCash, afterCash, memo) {
 }
 async function addTx(uid, item) { await push(txListRef(uid), item); }
 
+// ── v2.5 알림/우편함 (rooms/MAIN/bank/{uid}/messages) ──
+export function msgItem(o) {
+  return {
+    type: o.type || "system", title: o.title || "", body: o.body || "",
+    amount: int(o.amount), relatedId: o.relatedId || "", read: false,
+    actionLabel: o.actionLabel || "", actionUrl: o.actionUrl || "", createdAt: Date.now(),
+  };
+}
+async function addMessage(uid, o) { await push(msgListRef(uid), msgItem(o)); }
+export async function markMessageRead(uid, id) {
+  await update(ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}/messages/${id}`), { read: true });
+}
+export async function markAllMessagesRead(uid, msgs) {
+  const u = {}; (msgs || []).forEach((m) => { if (m && !m.read && m.id) u[`${m.id}/read`] = true; });
+  if (Object.keys(u).length) await update(msgListRef(uid), u);
+}
+export function unreadCount(msgs) { return (msgs || []).filter((m) => m && !m.read).length; }
+
 // ── 상태 로드(접속 시 1회) ──
 export async function loadState(uid) {
   const { db } = getFirebase();
   const now = Date.now();
-  const [pSnap, bSnap, tSnap] = await Promise.all([
+  const [pSnap, bSnap, tSnap, mSnap] = await Promise.all([
     get(playerRef(uid)),
     get(bankRef(uid)),
     get(query(txListRef(uid), orderByKey(), limitToLast(20))),
+    get(query(msgListRef(uid), orderByKey(), limitToLast(50))),
   ]);
   const pv = pSnap.val() || {};
   const cash = int(pv.cash);
@@ -194,6 +227,7 @@ export async function loadState(uid) {
 
   let bank = normalizeBank(bSnap.val(), now);
   const created = !bSnap.exists();
+  const prevTier = bank.vipTier; // computeVip 가 덮어쓰기 전의 등급(상승 감지용)
   if (!bank.nickname) bank.nickname = nickname;
 
   // 정산: 신규거나 / 1시간 이상 경과했고 이자가 붙는 경우에만 기록(쓰기 절감)
@@ -223,12 +257,65 @@ export async function loadState(uid) {
     ? Object.entries(tSnap.val()).map(([id, t]) => ({ id, ...t })).sort((a, b) => num(b.createdAt) - num(a.createdAt))
     : [];
 
+  let msgs = mSnap.exists()
+    ? Object.entries(mSnap.val()).map(([id, m]) => ({ id, ...m })).sort((a, b) => num(b.createdAt) - num(a.createdAt))
+    : [];
+
+  // 이벤트 알림 생성(중복 방지: relatedId) + 만료 보험 정리 — 접속 시 1회
+  msgs = await processBankEvents(uid, bank, prevTier, msgs, now);
+
   // 정산/만기 피드(0이면 UI 가 표시 안 함)
   const maturedFixed = Object.values(bank.fixed || {}).filter((f) => now >= num(f.maturesAt)).length;
   const maturedInvest = Object.values(bank.investments || {}).filter((v) => v && v.status !== "settled" && now >= num(v.maturesAt)).length;
   const feed = { freeInt: st.freeInt, loanInt: st.loanInt, vipInt: st.vipInt, maturedFixed, maturedInvest, applied: settled };
 
-  return { uid, cash, nickname, bank, tx, feed, settledNow: settled };
+  return { uid, cash, nickname, bank, tx, msgs, unread: unreadCount(msgs), feed, settledNow: settled };
+}
+
+// 접속 시 이벤트 알림 생성 + 만료 보험 status 정리. 같은 relatedId 알림은 중복 생성하지 않는다.
+async function processBankEvents(uid, bank, prevTier, msgs, now) {
+  const seen = new Set((msgs || []).map((m) => m.relatedId).filter(Boolean));
+  const out = [];
+  const emit = async (o) => {
+    if (o.relatedId && seen.has(o.relatedId)) return;
+    if (o.relatedId) seen.add(o.relatedId);
+    const item = msgItem(o);
+    await addMessage(uid, o);
+    out.push({ id: "local-" + Math.random().toString(36).slice(2), ...item });
+  };
+
+  // 만료 보험 status 정리(active → expired) + 만료 알림
+  const expUpdates = {};
+  for (const i of Object.values(bank.insurances || {})) {
+    if (i && i.status === "active" && num(i.expiresAt) <= now) {
+      i.status = "expired";
+      expUpdates[`insurances/${i.id}/status`] = "expired";
+      await emit({ type: "insurance", title: "보험 만료", body: `${i.title}이(가) 만료되었습니다.`, relatedId: "insexp-" + i.id });
+    }
+  }
+  if (Object.keys(expUpdates).length) await update(bankRef(uid), expUpdates);
+
+  // 정기예금 만기
+  for (const f of Object.values(bank.fixed || {})) {
+    if (f && now >= num(f.maturesAt)) {
+      await emit({ type: "fixed", title: "정기예금 만기 도착", body: `${f.title || f.label} 수령이 가능합니다.`, relatedId: "fixmat-" + f.id, actionLabel: "예금 탭에서 수령", actionUrl: "" });
+    }
+  }
+  // 투자 만기
+  for (const v of Object.values(bank.investments || {})) {
+    if (v && v.status !== "settled" && now >= num(v.maturesAt)) {
+      const out2 = investOutcome(v);
+      await emit({ type: "investment", title: "투자상품 만기 도착", body: `${v.title} 만기 · 예상 ${(out2.rate * 100).toFixed(1)}%. 수령이 가능합니다.`, relatedId: "invmat-" + v.id });
+    }
+  }
+  // VIP 등급 상승
+  if (vipRank(bank.vipTier) > vipRank(prevTier)) {
+    await emit({ type: "vip", title: "VIP 등급 상승", body: `${vipTierLabel(bank.vipTier)} 등급으로 승급했습니다.${bank.vipTier === "GOLD" ? " VIP 금고가 해금되었습니다." : ""}`, relatedId: "viptier-" + bank.vipTier });
+    await addTx(uid, txItem("vip_tier_up", "VIP 등급 상승", 0, 0, 0, `${vipTierLabel(prevTier)} → ${vipTierLabel(bank.vipTier)}`));
+  }
+
+  if (!out.length) return msgs;
+  return [...out, ...(msgs || [])].sort((a, b) => num(b.createdAt) - num(a.createdAt));
 }
 
 // 동작 직전 정산을 DB 에 확정(현재 bank 객체를 정산본으로 교체) — 동작들이 공통 사용
@@ -335,6 +422,7 @@ export async function claimFixed(uid, fixedId, state) {
   const beforeCash = int(state.cash);
   await runTransaction(cashRef(uid), (c) => int(c) + payout);
   await addTx(uid, txItem("fixedClaim", `${f.label} 만기수령 (원금+이자)`, payout, beforeCash, beforeCash + payout, `이자 ${won(interest)}`));
+  await addMessage(uid, { type: "fixed", title: "정기예금 수령 완료", body: `${f.label} ${won(payout)}을(를) 수령했습니다. (이자 ${won(interest)})`, amount: payout, relatedId: "fixclaim-" + fixedId });
   return `만기 수령 완료 (+${won(interest)} 이자)`;
 }
 
@@ -349,12 +437,19 @@ export async function takeLoan(uid, amount, state) {
   if (limit <= 0) throw new Error("현재 신용등급(F)으로는 대출이 불가합니다.");
   if (owed + amount > limit) throw new Error(`대출 한도 초과 (한도 ${won(limit)}, 현재 잔액 ${won(owed)})`);
   bank.loanPrincipal = owed + amount;
-  bank = adjustCredit(bank, -3, state.cash); // 대출 실행 → 신용 하락
+  // 대출 유예권: 활성 시 신용점수 하락을 -3 → -1 로 1회 완화하고 유예권을 사용 처리
+  const grace = activeInsurances(bank).find((i) => i.type === "loan");
+  bank = adjustCredit(bank, grace ? -1 : -3, state.cash);
+  if (grace) { bank.insurances[grace.id].status = "used"; bank.insurances[grace.id].usedAt = Date.now(); }
   await update(bankRef(uid), pruneBank(bank));
   const beforeCash = int(state.cash);
   await runTransaction(cashRef(uid), (c) => int(c) + amount); // 보유 현금 증가
-  await addTx(uid, txItem("loan", "대출 실행", amount, beforeCash, beforeCash + amount, `잔액 ${won(bank.loanPrincipal)}`));
-  return `대출 완료 (+${won(amount)})`;
+  await addTx(uid, txItem("loan", "대출 실행", amount, beforeCash, beforeCash + amount, `잔액 ${won(bank.loanPrincipal)}${grace ? " · 유예권 적용" : ""}`));
+  if (grace) {
+    await addTx(uid, txItem("insurance_used", "대출 유예권 적용", 0, beforeCash, beforeCash, "신용점수 하락 완화(-3 → -1)"));
+    await addMessage(uid, { type: "insurance", title: "대출 유예권 사용됨", body: "대출 실행 시 신용점수 하락이 완화되었습니다.", relatedId: "insused-" + grace.id });
+  }
+  return `대출 완료 (+${won(amount)})${grace ? " · 유예권으로 신용 하락 완화" : ""}`;
 }
 
 // 상환: 이자 먼저 → 원금. 보유 현금에서 차감.
@@ -427,8 +522,9 @@ function seededUnit(seed) { // 0~1
   return (x % 100000) / 100000;
 }
 // 투자 결과(만기): seed 로 [min,max] 안에서 비율 결정 → 가운데로 약간 치우치게(평균 기대 과도 방지)
+export function investProduct(id) { return INVESTMENT_PRODUCTS[id] || VIP_INVESTMENT_PRODUCTS[id] || null; }
 export function investOutcome(v) {
-  const p = INVESTMENT_PRODUCTS[v.productType] || { min: num(v.expectedMinRate), max: num(v.expectedMaxRate) };
+  const p = investProduct(v.productType) || { min: num(v.expectedMinRate), max: num(v.expectedMaxRate) };
   const u0 = seededUnit(v.seed);
   const u1 = seededUnit(v.seed + "x");
   const u = (u0 + u1) / 2; // 평균 두 번 → 종 모양(극단값 확률↓)
@@ -490,24 +586,32 @@ export async function buyInsurance(uid, productId, state) {
   let bank = await commitSettle(uid, { ...state.bank }, state.cash);
   const now = Date.now();
   if (activeInsurances(bank, now).some((i) => i.type === productId)) throw new Error("이미 가입 중인 보험입니다.");
-  if (prod.premium > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
+  const tier = state.bank.vipTier || "NORMAL";
+  const disc = vipDiscount(tier);
+  const premium = Math.max(1, Math.floor(prod.premium * (1 - disc))); // 할인해도 0원은 안 됨
+  if (premium > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
   const fb = int(state.cash);
-  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); if (base < prod.premium) return; return base - prod.premium; });
+  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); if (base < premium) return; return base - premium; });
   if (!res.committed) throw new Error("보유 현금이 부족합니다.");
   const id = "ins" + now.toString(36);
   bank.insurances = bank.insurances || {};
-  bank.insurances[id] = { id, type: productId, title: prod.title, premium: prod.premium, status: "active", startedAt: now, expiresAt: now + prod.ms, usedAt: 0, createdAt: now };
+  bank.insurances[id] = { id, type: productId, title: prod.title, premium, basePremium: prod.premium, status: "active", startedAt: now, expiresAt: now + prod.ms, usedAt: 0, createdAt: now };
   bank = computeVip(bank, state.cash);
   await update(bankRef(uid), pruneBank(bank));
   const beforeCash = int(state.cash);
-  await addTx(uid, txItem("insurance_buy", `${prod.title} 가입`, -prod.premium, beforeCash, beforeCash - prod.premium, ""));
-  return `${prod.title} 가입 완료`;
+  const memo = disc > 0 ? `VIP ${vipTierLabel(tier)} 할인 ${Math.round(disc * 100)}% 적용` : "";
+  await addTx(uid, txItem("insurance_buy", `${prod.title} 가입`, -premium, beforeCash, beforeCash - premium, memo));
+  await addMessage(uid, { type: "insurance", title: "보험 가입 완료", body: `${prod.title}에 가입했습니다.${memo ? " (" + memo + ")" : ""}`, amount: -premium, relatedId: "insbuy-" + id });
+  return `${prod.title} 가입 완료${disc > 0 ? ` · ${Math.round(disc * 100)}% 할인` : ""}`;
 }
 
 // ── 투자상품 ──
 export async function buyInvestment(uid, productId, amount, state) {
-  const prod = INVESTMENT_PRODUCTS[productId];
+  const prod = investProduct(productId);
   if (!prod) throw new Error("투자상품을 선택하세요.");
+  if (prod.requiredVipTier && vipRank(state.bank.vipTier) < vipRank(prod.requiredVipTier)) {
+    throw new Error(`${vipTierLabel(prod.requiredVipTier)} 등급부터 가입 가능한 상품입니다.`);
+  }
   amount = int(amount);
   if (amount <= 0) throw new Error("금액을 확인하세요.");
   if (amount > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
@@ -544,6 +648,7 @@ export async function claimInvestment(uid, invId, state) {
   await runTransaction(cashRef(uid), (c) => int(c) + out.amount);
   const [label] = investLabel(out.rate);
   await addTx(uid, txItem("investment_settle", `${v.title} 정산 · ${label}`, out.amount, beforeCash, beforeCash + out.amount, `${(out.rate * 100).toFixed(1)}%`));
+  await addMessage(uid, { type: "investment", title: "투자 정산 완료", body: `${v.title} 정산: ${won(out.amount)} 수령 (${(out.rate * 100).toFixed(1)}%, ${label})`, amount: out.amount, relatedId: "invsettle-" + invId });
   return `${label}! ${out.profit >= 0 ? "+" : "−"}${won(Math.abs(out.profit))} (${(out.rate * 100).toFixed(1)}%)`;
 }
 

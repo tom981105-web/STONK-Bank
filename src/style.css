@@ -218,3 +218,31 @@ b { font-variant-numeric: tabular-nums; }
 .bk-risk { font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 6px; background: rgba(255,255,255,.06); color: var(--text2); }
 .inv-win { color: var(--green); font-weight: 800; } .inv-ok { color: var(--green); }
 .inv-flat { color: var(--text2); } .inv-lose { color: #f5b14a; } .inv-crash { color: var(--red); font-weight: 800; }
+
+/* ════════ v2.5 ════════ */
+/* 알림 벨 */
+.bk-bell { position: relative; background: none; border: 1px solid var(--border); border-radius: 999px; width: 38px; height: 38px; font-size: 16px; cursor: pointer; color: var(--text); }
+.bk-bell:hover { border-color: var(--gold); }
+.bk-bell-dot { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: var(--red); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
+
+/* 알림 리스트 */
+.bk-msgs { list-style: none; display: flex; flex-direction: column; }
+.bk-msg { display: flex; align-items: flex-start; gap: 11px; padding: 11px 4px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.bk-msg:last-child { border-bottom: none; }
+.bk-msg.unread { background: rgba(232,200,122,.05); }
+.bk-msg-ico { font-size: 18px; line-height: 1.4; }
+.bk-msg-mid { flex: 1; min-width: 0; }
+.bk-msg-mid b { display: block; font-size: 14px; }
+.bk-msg-mid small { color: var(--text2); font-size: 12px; display: block; line-height: 1.5; }
+.bk-msg-time { color: var(--muted); font-size: 11px; font-style: normal; }
+.bk-msg-new { align-self: center; font-size: 10px; font-weight: 900; color: var(--gold); border: 1px solid var(--gold); border-radius: 6px; padding: 1px 5px; }
+.bk-msgs.mini .bk-msg { padding: 8px 2px; cursor: default; }
+
+/* 잠금 투자상품 */
+.bk-product.locked { opacity: .55; }
+.bk-product s { opacity: .6; }
+
+/* BLACK 등급 전용 효과 */
+#app.is-black .bk-header { border-bottom-color: #3a2f12; }
+#app.is-black .net-hero { border: 1px solid #3a2f12; box-shadow: 0 0 0 1px rgba(240,212,136,.15), 0 10px 30px rgba(0,0,0,.5); }
+.bk-card.black-card { border: 1px solid #3a2f12; background: linear-gradient(135deg, rgba(240,212,136,.06), #14151c); }

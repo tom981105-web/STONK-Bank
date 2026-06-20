@@ -6,10 +6,12 @@ import * as Bank from "./services/bank.js";
 
 const {
   won, int, num, fixedTotal, netWorth, gradeFromScore, loanLimit, FIXED_PRODUCTS,
-  INSURANCE_PRODUCTS, INVESTMENT_PRODUCTS, investmentsValue, investOutcome, investLabel,
+  INSURANCE_PRODUCTS, INVESTMENT_PRODUCTS, VIP_INVESTMENT_PRODUCTS, investProduct,
+  investmentsValue, investOutcome, investLabel,
   loanRisk, depositStability, activeInsurances, insuranceActive, buyInsurance,
   buyInvestment, claimInvestment, vipTierLabel, vipVaultUnlocked, depositVip, withdrawVip,
-  VIP_VAULT_RATE_DAY, VIP_VAULT_MIN_TIER,
+  VIP_VAULT_RATE_DAY, VIP_VAULT_MIN_TIER, vipDiscount, vipVaultRate, vipRank,
+  markMessageRead, markAllMessagesRead, unreadCount,
 } = Bank;
 
 const ADMIN_UID = "yaV8N60yIiUggaWNpNF2VhkCwxb2";
@@ -90,10 +92,12 @@ function render() {
   const totalDeposit = int(b.balance) + fixedTotal(b);
   const nw = netWorth(state.cash, b);
   const grade = gradeFromScore(b.creditScore);
+  app.className = b.vipTier === "BLACK" ? "is-black" : "";
   app.innerHTML = `
     <header class="bk-header">
       <a class="bk-brand" href="#" data-home title="STONK Bank 메인"><span class="bk-mark">$</span><b>STONK</b> Bank</a>
       <div class="bk-nav">
+        <a href="../STONK-Home/index.html">홈</a>
         <a href="../STONK-Battle/index.html">주식시장</a>
         <a href="../STONK-Board/index.html">주식소식</a>
         <a href="../STONK-Wiki/index.html">주식정보</a>
@@ -101,7 +105,10 @@ function render() {
         <a href="../STONK-Gacha/index.html">가챠</a>
         ${isAdmin ? `<a href="../STONK-Admin/market-admin.html">관리자</a>` : ""}
       </div>
-      <div class="bk-user"><span class="bk-nick">${esc(state.nickname)}</span>${gradeBadge(grade)}</div>
+      <div class="bk-user">
+        <button class="bk-bell" type="button" data-tab="messages" title="알림/우편함" aria-label="알림">🔔${state.unread > 0 ? `<span class="bk-bell-dot">${state.unread > 99 ? "99+" : state.unread}</span>` : ""}</button>
+        <span class="bk-nick">${esc(state.nickname)}</span>${vipBadge(b.vipTier)}${gradeBadge(grade)}
+      </div>
     </header>
 
     <section class="bk-summary">
@@ -112,7 +119,7 @@ function render() {
     </section>
 
     <nav class="bk-tabs">
-      ${["dashboard:대시보드", "deposit:예금", "loan:대출", "insurance:보험", "invest:투자", "vip:VIP", "history:거래내역"].map((t) => {
+      ${["dashboard:대시보드", "deposit:예금", "loan:대출", "insurance:보험", "invest:투자", "vip:VIP", "messages:알림", "history:거래내역"].map((t) => {
         const [k, label] = t.split(":");
         return `<button class="bk-tab ${tab === k ? "active" : ""}" data-tab="${k}">${label}</button>`;
       }).join("")}
@@ -130,8 +137,28 @@ function tabBody(t) {
   if (t === "insurance") return insuranceTab();
   if (t === "invest") return investTab();
   if (t === "vip") return vipTab();
+  if (t === "messages") return messagesTab();
   if (t === "history") return historyTab();
   return dashboardTab();
+}
+
+const MSG_ICON = { insurance: "🛡️", investment: "📈", fixed: "🏦", vip: "👑", loan: "⚠️", admin: "🛠️", system: "🔔" };
+function msgRow(m) {
+  const icon = MSG_ICON[m.type] || "🔔";
+  return `<li class="bk-msg ${m.read ? "" : "unread"}" ${m.id && !String(m.id).startsWith("local-") ? `data-msgread="${esc(m.id)}"` : ""}>
+    <span class="bk-msg-ico">${icon}</span>
+    <div class="bk-msg-mid"><b>${esc(m.title)}</b><small>${esc(m.body)}</small><i class="bk-msg-time">${fmtTime(m.createdAt)}</i></div>
+    ${m.actionUrl ? `<a class="bk-btn ghost small" href="${esc(m.actionUrl)}">${esc(m.actionLabel || "이동")}</a>` : ""}
+    ${m.read ? "" : `<span class="bk-msg-new">N</span>`}</li>`;
+}
+function messagesTab() {
+  const msgs = (state.msgs || []).slice(0, 30);
+  return `<div class="bk-card">
+    <h3>알림 / 우편함 <small class="muted">안읽음 ${state.unread || 0} · 최근 ${msgs.length}건</small>
+      ${state.unread > 0 ? `<button class="bk-btn ghost small" data-allread style="float:right">전체 읽음</button>` : ""}</h3>
+    ${msgs.length ? `<ul class="bk-msgs">${msgs.map(msgRow).join("")}</ul>` : `<p class="bk-empty">받은 알림이 없습니다.</p>`}
+    <p class="bk-note">보험 적용·투자/정기 만기·VIP 승급 등 금융 이벤트가 여기에 기록됩니다. 모든 금액은 STONK 가상 게임머니입니다.</p>
+  </div>`;
 }
 
 // 정산/만기 피드백(접속 1회) — 0원이면 표시 안 함
@@ -220,6 +247,11 @@ function dashboardTab() {
         <div class="bk-row"><span>등급 / 점수</span><b>${vipBadge(b.vipTier)} ${b.vipScore}점</b></div>
         <div class="bk-row"><span>VIP 금고</span><b>${won(b.vipVaultBalance)} <small class="muted">${vipVaultUnlocked(b) ? "" : "· 잠금"}</small></b></div>
         <button class="bk-btn ghost small" data-tab="vip">VIP 보기</button>
+      </div>
+
+      <div class="bk-card">
+        <h3>알림 <span class="bk-tag ${state.unread > 0 ? "risk" : "safe"}">안읽음 ${state.unread || 0}</span><button class="bk-btn ghost small" data-tab="messages" style="float:right">전체 보기</button></h3>
+        ${(state.msgs || []).length ? `<ul class="bk-msgs mini">${(state.msgs || []).slice(0, 3).map(msgRow).join("")}</ul>` : `<p class="bk-empty">받은 알림이 없습니다.</p>`}
       </div>
 
       <div class="bk-card">
@@ -328,7 +360,7 @@ const TX_TYPE = {
   fixedClaim: ["만기수령", "in"], loan: ["대출", "in"], repay: ["상환", "out"], interest: ["예금이자", "in"], loanInterest: ["대출이자", "out"],
   vipInterest: ["VIP이자", "in"], insurance_buy: ["보험가입", "out"], insurance_expired: ["보험만료", "out"], insurance_used: ["보험사용", "in"],
   investment_buy: ["투자가입", "out"], investment_settle: ["투자정산", "in"], investment_cancel: ["투자해지", "in"],
-  vip_deposit: ["VIP입금", "in"], vip_withdraw: ["VIP출금", "out"],
+  vip_deposit: ["VIP입금", "in"], vip_withdraw: ["VIP출금", "out"], vip_tier_up: ["VIP승급", "in"],
 };
 // 필터 → 해당 type 집합
 const TX_FILTERS = {
@@ -339,7 +371,7 @@ const TX_FILTERS = {
   interest: ["interest", "loanInterest", "vipInterest"],
   insurance: ["insurance_buy", "insurance_expired", "insurance_used"],
   invest: ["investment_buy", "investment_settle", "investment_cancel"],
-  vip: ["vip_deposit", "vip_withdraw"],
+  vip: ["vip_deposit", "vip_withdraw", "vip_tier_up"],
 };
 const FILTER_LABELS = { all: "전체", deposit: "예금", fixed: "정기예금", loan: "대출", interest: "이자", insurance: "보험", invest: "투자", vip: "VIP" };
 
@@ -365,35 +397,54 @@ function historyTab() {
   </div>`;
 }
 
+// 보험 실제 효과 설명(v2.5 실연동)
+const INS_DESC = {
+  arcade: "Arcade에서 100만원 이상 손실 시 1회에 한해 손실액의 10%를 환급합니다. (자동 적용)",
+  gacha: "10회 뽑기에서 Epic 이상이 없거나 Common이 8개 이상일 때 Dust 300을 지급합니다. (자동 적용)",
+  loan: "대출 실행 또는 대출 위험도 하락 시 신용점수 하락을 1회 완화합니다. (자동 적용)",
+};
+function insStatusBadge(i, now) {
+  if (i.status === "used") return `<span class="bk-status ok">사용됨</span>`;
+  if (i.status === "expired" || num(i.expiresAt) <= now) return `<span class="bk-status muted">만료</span>`;
+  return `<span class="bk-status warn">활성</span>`;
+}
 // ── 보험 탭 ──
 function insuranceTab() {
   const b = state.bank;
   const now = Date.now();
+  const tier = b.vipTier || "NORMAL";
+  const disc = vipDiscount(tier);
   const all = Object.values(b.insurances || {});
+  const usedRecent = all.filter((i) => i.status === "used").sort((a, c) => num(c.usedAt) - num(a.usedAt)).slice(0, 3);
   return `
     <div class="bk-grid">
       ${Object.values(INSURANCE_PRODUCTS).map((p) => {
         const mine = all.find((i) => i.type === p.id && insuranceActive(i, now));
+        const finalP = Math.max(1, Math.floor(p.premium * (1 - disc)));
         return `<div class="bk-card">
-          <h3>${esc(p.title)} ${mine ? `<span class="bk-tag safe">가입중</span>` : `<span class="bk-tag risk">위험 완화</span>`}</h3>
-          <p class="bk-note">${esc(p.desc)}</p>
-          <div class="bk-row"><span>가입비</span><b>${won(p.premium)}</b></div>
+          <h3>${esc(p.title)} ${mine ? `<span class="bk-tag safe">가입중</span>` : `<span class="bk-tag risk">게임머니 보호</span>`}</h3>
+          <p class="bk-note">${esc(INS_DESC[p.id] || p.desc)}</p>
+          <div class="bk-row"><span>가입비</span><b>${disc > 0 ? `<s class="muted">${won(p.premium)}</s> ${won(finalP)}` : won(p.premium)}</b></div>
+          ${disc > 0 ? `<div class="bk-row"><span>VIP 할인</span><b class="ok">${vipTierLabel(tier)} ${Math.round(disc * 100)}%</b></div>` : ""}
           ${mine
             ? `<div class="bk-row"><span>만료까지</span><b class="ok">${fmtLeft(Math.max(0, num(mine.expiresAt) - now))}</b></div>
                <button class="bk-btn" disabled>가입 중</button>`
-            : `<button class="bk-btn primary" data-buyins="${p.id}">가입하기</button>`}
+            : `<button class="bk-btn primary" data-buyins="${p.id}">${won(finalP)} 가입하기</button>`}
         </div>`;
       }).join("")}
     </div>
+    ${usedRecent.length ? `<div class="bk-card">
+      <h3>최근 보험 적용 기록</h3>
+      <div class="bk-fixedlist">${usedRecent.map((i) => `<div class="bk-fixed matured"><div><b>${esc(i.title)}</b><small>${i.usedAt ? fmtTime(i.usedAt) + " 적용됨" : "적용됨"}</small></div><span class="bk-status ok">사용됨</span></div>`).join("")}</div>
+    </div>` : ""}
     <div class="bk-card">
       <h3>내 보험 내역</h3>
-      ${all.length ? `<div class="bk-fixedlist">${all.sort((a, b2) => num(b2.startedAt) - num(a.startedAt)).map((i) => {
-        const active = insuranceActive(i, now);
-        return `<div class="bk-fixed ${active ? "matured" : ""}">
-          <div><b>${esc(i.title)}</b><small>${won(i.premium)} · ${active ? "유효 · 만료 " + fmtLeft(Math.max(0, num(i.expiresAt) - now)) : "<span class='muted'>만료</span>"}</small></div>
-        </div>`;
-      }).join("")}</div>` : `<p class="bk-empty">가입 이력이 없습니다.</p>`}
-      <p class="bk-note">보험은 손실을 줄이기 위한 게임머니 소모 기능입니다. 자동 보상 연동은 다음 패치(v2.1)에서 확장됩니다.</p>
+      ${all.length ? `<div class="bk-fixedlist">${all.sort((a, c) => num(c.startedAt) - num(a.startedAt)).map((i) => `
+        <div class="bk-fixed ${insuranceActive(i, now) ? "matured" : ""}">
+          <div><b>${esc(i.title)}</b><small>${won(i.premium)} · ${insuranceActive(i, now) ? "만료 " + fmtLeft(Math.max(0, num(i.expiresAt) - now)) : (i.status === "used" ? "보상 적용 완료" : "만료됨")}</small></div>
+          ${insStatusBadge(i, now)}
+        </div>`).join("")}</div>` : `<p class="bk-empty">가입 이력이 없습니다.</p>`}
+      <p class="bk-note">보험은 손실을 완화/보호하는 <b>게임머니 보호 기능</b>입니다. 무한 증식 수단이 아닙니다.</p>
     </div>`;
 }
 
@@ -406,10 +457,12 @@ function investTab() {
     <div class="bk-grid">
       <div class="bk-card">
         <h3>투자상품 가입 <span class="bk-tag risk">원금 손실 가능</span></h3>
-        ${Object.values(INVESTMENT_PRODUCTS).map((p) => `
-          <label class="bk-product"><input type="radio" name="invProd" value="${p.id}" ${p.id === "stable" ? "checked" : ""}/>
-            <span><b>${esc(p.title)} <small class="bk-risk r-${esc(p.risk)}">${esc(p.risk)}</small></b>
-            <small>${fmtDur(p.ms)} · 예상 ${(p.min * 100).toFixed(0)}% ~ +${(p.max * 100).toFixed(0)}%</small></span></label>`).join("")}
+        ${[...Object.values(INVESTMENT_PRODUCTS), ...Object.values(VIP_INVESTMENT_PRODUCTS)].map((p) => {
+          const locked = p.requiredVipTier && vipRank(b.vipTier) < vipRank(p.requiredVipTier);
+          return `<label class="bk-product ${locked ? "locked" : ""}"><input type="radio" name="invProd" value="${p.id}" ${p.id === "stable" ? "checked" : ""} ${locked ? "disabled" : ""}/>
+            <span><b>${esc(p.title)} <small class="bk-risk r-${esc(p.risk)}">${esc(p.risk)}</small>${p.requiredVipTier ? ` <small class="bk-tag ${locked ? "risk" : "safe"}">${vipTierLabel(p.requiredVipTier)} 전용</small>` : ""}</b>
+            <small>${fmtDur(p.ms)} · 예상 ${(p.min * 100).toFixed(0)}% ~ +${(p.max * 100).toFixed(0)}%${locked ? ` · ${vipTierLabel(p.requiredVipTier)} 등급 필요` : ""}</small></span></label>`;
+        }).join("")}
         <div class="bk-amount">
           <input id="invAmt" type="number" inputmode="numeric" placeholder="투자 금액" min="1" />
           <span class="bk-suffix">원</span>
@@ -440,21 +493,37 @@ function investTab() {
     </div>`;
 }
 
+// 등급별 혜택 안내(표시용)
+const VIP_BENEFITS = {
+  NORMAL: ["기본 Bank 기능 사용"],
+  SILVER: ["보험 가입비 3% 할인", "거래내역 SILVER 표시"],
+  GOLD: ["VIP 금고 사용 가능", "보험 가입비 5% 할인", "VIP 금고 이자 하루 0.30%"],
+  PLATINUM: ["VIP 금고 이자 하루 0.35%", "보험 가입비 8% 할인", "PLATINUM 안정 채권 해금"],
+  BLACK: ["VIP 금고 이자 하루 0.40%", "보험 가입비 10% 할인", "BLACK 시크릿 펀드 해금", "대시보드 BLACK 전용 효과"],
+};
 // ── VIP 탭 ──
 function vipTab() {
   const b = state.bank;
   const unlocked = vipVaultUnlocked(b);
+  const tier = b.vipTier || "NORMAL";
+  const rate = vipVaultRate(tier) || VIP_VAULT_RATE_DAY;
   return `
     <div class="bk-grid">
-      <div class="bk-card credit">
-        <h3>VIP 등급</h3>
-        <div class="bk-credit"><div class="bk-grade-big v-${b.vipTier}">${vipTierLabel(b.vipTier).slice(0,1)}</div>
-          <div class="bk-score"><div class="bk-score-bar"><span style="width:${b.vipScore}%"></span></div><small>${vipTierLabel(b.vipTier)} · ${b.vipScore} / 100</small></div></div>
-        <p class="bk-note">예금·정기·투자·보험 이용과 무대출·높은 순자산으로 VIP 점수가 오릅니다. GOLD 등급부터 VIP 금고를 사용할 수 있습니다.</p>
+      <div class="bk-card credit ${tier === "BLACK" ? "black-card" : ""}">
+        <h3>VIP 등급 ${tier === "BLACK" ? `<span class="bk-tag" style="background:#14151c;color:#f0d488">BLACK 혜택 활성화</span>` : ""}</h3>
+        <div class="bk-credit"><div class="bk-grade-big v-${tier}">${vipTierLabel(tier).slice(0,1)}</div>
+          <div class="bk-score"><div class="bk-score-bar"><span style="width:${b.vipScore}%"></span></div><small>${vipTierLabel(tier)} · ${b.vipScore} / 100</small></div></div>
+        <p class="bk-note">예금·정기·투자·보험 이용과 무대출·높은 순자산으로 VIP 점수가 오릅니다. GOLD 등급부터 VIP 금고가 열립니다.</p>
+      </div>
+      <div class="bk-card">
+        <h3>등급별 혜택</h3>
+        ${["SILVER","GOLD","PLATINUM","BLACK"].map((t) => `
+          <div class="bk-row"><span>${vipBadge(t)}</span><b class="${vipRank(tier) >= vipRank(t) ? "ok" : "muted"}" style="font-weight:600;font-size:12px;text-align:right">${VIP_BENEFITS[t].join(" · ")}</b></div>`).join("")}
       </div>
       <div class="bk-card">
         <h3>VIP 금고 ${unlocked ? `<span class="bk-tag safe">이용 가능</span>` : `<span class="bk-tag risk">GOLD부터 잠금</span>`}</h3>
         <div class="bk-row"><span>금고 잔액</span><b>${won(b.vipVaultBalance)}</b></div>
+        <div class="bk-row"><span>내 이자율</span><b class="ok">하루 ${(rate * 100).toFixed(2)}%</b></div>
         ${unlocked ? `
         <div class="bk-amount">
           <input id="vipAmt" type="number" inputmode="numeric" placeholder="금액" min="1" />
@@ -468,7 +537,7 @@ function vipTab() {
           <button class="bk-btn primary" data-act="vipDeposit">입금하기</button>
           <button class="bk-btn" data-act="vipWithdraw">출금하기</button>
         </div>
-        <p class="bk-note">VIP 금고 이자 하루 ${(VIP_VAULT_RATE_DAY * 100).toFixed(1)}% (자유예금보다 높음). 보유 현금 ${won(state.cash)}</p>`
+        <p class="bk-note">VIP 금고 이자는 등급이 높을수록 올라갑니다(과도한 수익 방지를 위해 낮게 유지). 보유 현금 ${won(state.cash)}</p>`
         : `<p class="bk-note">현재 등급에서는 VIP 금고가 잠겨 있습니다. 예금·투자 등을 이용해 <b>GOLD</b> 등급에 도달하면 열립니다.</p>`}
       </div>
     </div>`;
@@ -503,6 +572,16 @@ function bind() {
     if (p && confirm(`${p.title} 가입비 ${won(p.premium)}을(를) 결제할까요? (게임머니)`)) act(() => buyInsurance(state.uid, b.dataset.buyins, state));
   }));
   app.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { histFilter = b.dataset.filter; render(); }));
+  app.querySelectorAll("[data-msgread]").forEach((el) => el.addEventListener("click", () => {
+    const m = (state.msgs || []).find((x) => x.id === el.dataset.msgread);
+    if (m && !m.read) { m.read = true; state.unread = unreadCount(state.msgs); markMessageRead(state.uid, m.id).catch(() => {}); render(); }
+  }));
+  const allRead = app.querySelector("[data-allread]");
+  if (allRead) allRead.addEventListener("click", () => {
+    markAllMessagesRead(state.uid, state.msgs).catch(() => {});
+    (state.msgs || []).forEach((m) => { m.read = true; });
+    state.unread = 0; render();
+  });
 }
 
 function fillMax(spec) {
