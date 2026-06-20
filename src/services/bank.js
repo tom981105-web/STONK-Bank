@@ -36,7 +36,7 @@ export const GRADE_ORDER = ["F", "D", "C", "B", "A", "S"];
 export const INSURANCE_PRODUCTS = {
   arcade:  { id: "arcade",  title: "Arcade 손실 완화 보험", premium: 3000000, ms: 24 * 3600 * 1000, desc: "24시간 · 아케이드 큰 손실 시 일부 완화(예정)" },
   gacha:   { id: "gacha",   title: "Gacha 폭망 보호권",     premium: 5000000, ms: 24 * 3600 * 1000, desc: "24시간 · 가챠 과소비 경고 강화" },
-  loan:    { id: "loan",    title: "대출 유예권",           premium: 2000000, ms: 24 * 3600 * 1000, desc: "24시간 · 대출 위험도 한 단계 완화 표시" },
+  loan:    { id: "loan",    title: "대출 유예권",           premium: 2000000, ms: 24 * 3600 * 1000, desc: "24시간 · 대출 위험도를 한 단계 완화 표시(신용등급과는 별개)" },
 };
 
 // ───────────── v2.0: 투자상품(자동 결과형) ─────────────
@@ -314,7 +314,7 @@ export async function cancelFixed(uid, fixedId, state) {
   if (!f) throw new Error("정기예금을 찾을 수 없습니다.");
   const principal = int(f.amount);
   delete bank.fixed[fixedId];
-  await update(bankRef(uid), { ...pruneBank(bank), [`fixed/${fixedId}`]: null });
+  await update(bankRef(uid), pruneBank(bank)); // fixed 객체 전체를 갱신(삭제 키 제외) — 별도 null 경로 불필요
   const beforeCash = int(state.cash);
   await runTransaction(cashRef(uid), (c) => int(c) + principal); // 만기 전 해지: 원금만 반환(이자 없음)
   await addTx(uid, txItem("fixedCancel", `${f.label} 중도해지 (이자 미지급)`, principal, beforeCash, beforeCash + principal, "만기 전 해지"));
@@ -331,7 +331,7 @@ export async function claimFixed(uid, fixedId, state) {
   const payout = principal + interest;
   delete bank.fixed[fixedId];
   bank = adjustCredit(bank, 1, state.cash); // 정상 만기 수령 → 신용 소폭 +
-  await update(bankRef(uid), { ...pruneBank(bank), [`fixed/${fixedId}`]: null });
+  await update(bankRef(uid), pruneBank(bank)); // fixed 객체 전체를 갱신(삭제 키 제외) — 별도 null 경로 불필요
   const beforeCash = int(state.cash);
   await runTransaction(cashRef(uid), (c) => int(c) + payout);
   await addTx(uid, txItem("fixedClaim", `${f.label} 만기수령 (원금+이자)`, payout, beforeCash, beforeCash + payout, `이자 ${won(interest)}`));
@@ -456,9 +456,17 @@ export function loanRisk(cash, bank) {
   if (owed <= 0) return { key: "safe", label: "안전", tone: "ok" };
   const assets = int(cash) + int(bank.balance) + fixedTotal(bank) + int(bank.vipVaultBalance) + investmentsValue(bank);
   const ratio = assets > 0 ? owed / assets : 1;
-  if (ratio < 0.3) return { key: "ok", label: "관리 가능", tone: "ok", ratio };
-  if (ratio < 0.7) return { key: "warn", label: "주의", tone: "warn", ratio };
-  return { key: "high", label: "위험", tone: "danger", ratio };
+  let r = ratio < 0.3 ? { key: "ok", label: "관리 가능", tone: "ok" }
+        : ratio < 0.7 ? { key: "warn", label: "주의", tone: "warn" }
+        : { key: "high", label: "위험", tone: "danger" };
+  // 대출 유예권(loan 보험) 가입 중이면 '위험도 표시'를 한 단계 완화한다(신용등급과는 별개).
+  if (activeInsurances(bank).some((i) => i.type === "loan")) {
+    if (r.key === "high") r = { key: "warn", label: "주의", tone: "warn" };
+    else if (r.key === "warn") r = { key: "ok", label: "관리 가능", tone: "ok" };
+    r.eased = true;
+  }
+  r.ratio = ratio;
+  return r;
 }
 export function depositStability(cash, bank) {
   const dep = int(bank.balance) + fixedTotal(bank) + int(bank.vipVaultBalance);
@@ -531,7 +539,7 @@ export async function claimInvestment(uid, invId, state) {
   const out = investOutcome(v);
   delete bank.investments[invId];
   bank = computeVip(bank, state.cash);
-  await update(bankRef(uid), { ...pruneBank(bank), [`investments/${invId}`]: null });
+  await update(bankRef(uid), pruneBank(bank)); // investments 객체 전체를 갱신(삭제 키 제외)
   const beforeCash = int(state.cash);
   await runTransaction(cashRef(uid), (c) => int(c) + out.amount);
   const [label] = investLabel(out.rate);

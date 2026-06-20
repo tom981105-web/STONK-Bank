@@ -195,7 +195,7 @@ function dashboardTab() {
 
       <div class="bk-card">
         <h3>리스크 진단</h3>
-        <div class="bk-row"><span>대출 위험도</span><b>${statusBadge(risk.label, risk.tone)}</b></div>
+        <div class="bk-row"><span>대출 위험도</span><b>${statusBadge(risk.label, risk.tone)}${risk.eased ? ` <small class="muted">유예권 적용</small>` : ""}</b></div>
         <div class="bk-row"><span>예금 안정도</span><b class="${stab.tone === "ok" ? "ok" : "muted"}">${stab.label}</b></div>
         <div class="bk-row"><span>오늘 정산 이자</span><b class="${todayInt > 0 ? "ok" : "muted"}">${todayInt > 0 ? "+" + won(todayInt) : "정산 없음"}</b></div>
         ${risk.key === "high" || risk.key === "severe" ? `<p class="bk-note danger">자산 대비 대출 비중이 높습니다. 상환을 권장합니다.</p>` : ""}
