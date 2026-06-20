@@ -168,3 +168,53 @@ b { font-variant-numeric: tabular-nums; }
   .bk-nav { order: 3; width: 100%; margin-left: 0; }
   .bk-user { margin-left: auto; }
 }
+
+/* ════════ v2.0 ════════ */
+.ok { color: var(--green); }
+.bk-toast.warn { background: linear-gradient(135deg, #f5b14a, #d98a1e); color: #1a1206; }
+
+/* 정산 피드 배너 */
+.bk-feed { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 11px 14px; margin-bottom: 4px;
+  border: 1px solid rgba(232,200,122,.35); background: rgba(232,200,122,.08); border-radius: var(--radius-sm); font-size: 13px; font-weight: 700; }
+.bk-feed .ok { color: var(--green); } .bk-feed .warn { color: var(--red); }
+
+/* 순자산 히어로 카드 */
+.net-hero { grid-column: 1 / -1; background: linear-gradient(135deg, rgba(232,200,122,.10), rgba(91,140,255,.06)); }
+.bk-net-big { font-size: 34px; font-weight: 900; font-variant-numeric: tabular-nums; margin: 4px 0 12px; }
+.bk-net-big.minus { color: var(--red); }
+.bk-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.bk-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: 999px; background: var(--bg2); border: 1px solid var(--border); font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.bk-chip i { font-style: normal; color: var(--muted); font-weight: 700; font-size: 11px; }
+.bk-chip.warn { border-color: rgba(242,86,106,.4); }
+.bk-chip.warn, .bk-chip.warn i { color: var(--red); }
+
+/* 상태/위험 배지 */
+.bk-status { font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 999px; }
+.bk-status.ok { color: var(--green); background: rgba(54,211,153,.14); }
+.bk-status.warn { color: #f5b14a; background: rgba(245,177,74,.16); }
+.bk-status.danger { color: var(--red); background: rgba(242,86,106,.16); }
+.bk-status.muted { color: var(--muted); background: rgba(255,255,255,.05); }
+
+/* VIP 배지/등급 */
+.bk-vip { font-size: 12px; font-weight: 800; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
+.bk-vip.v-NORMAL { color: var(--text2); }
+.bk-vip.v-SILVER { color: #cfd6e2; background: rgba(207,214,226,.12); }
+.bk-vip.v-GOLD { color: #1a140a; background: linear-gradient(135deg,#f0d488,#e0a93f); }
+.bk-vip.v-PLATINUM { color: #1a140a; background: linear-gradient(135deg,#dfe7ef,#9fb4cc); }
+.bk-vip.v-BLACK { color: #f0d488; background: #14151c; border-color: #3a2f12; }
+.bk-grade-big.v-GOLD { color:#1a140a; background: linear-gradient(135deg,#f0d488,#e0a93f); }
+.bk-grade-big.v-PLATINUM { color:#1a140a; background: linear-gradient(135deg,#dfe7ef,#9fb4cc); }
+.bk-grade-big.v-BLACK { color:#f0d488; background:#14151c; }
+.bk-grade-big.v-SILVER { color:#1a140a; background: linear-gradient(135deg,#e6ebf2,#aab6c6); }
+.bk-grade-big.v-NORMAL { color: var(--text2); background: var(--bg2); }
+
+/* 거래내역 필터 */
+.bk-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.bk-chipbtn { font-size: 12px; font-weight: 800; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--card2); color: var(--text2); cursor: pointer; }
+.bk-chipbtn.active { background: var(--brand-grad); color: #1a140a; border-color: transparent; }
+.bk-tx.mini li { padding: 8px 2px; }
+
+/* 투자 라벨/위험 */
+.bk-risk { font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 6px; background: rgba(255,255,255,.06); color: var(--text2); }
+.inv-win { color: var(--green); font-weight: 800; } .inv-ok { color: var(--green); }
+.inv-flat { color: var(--text2); } .inv-lose { color: #f5b14a; } .inv-crash { color: var(--red); font-weight: 800; }
