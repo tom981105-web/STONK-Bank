@@ -253,14 +253,16 @@ export async function depositFree(uid, amount, state) {
   amount = int(amount);
   if (amount <= 0) throw new Error("금액을 확인하세요.");
   let bank = await commitSettle(uid, { ...state.bank }, state.cash);
-  // 현금 차감(트랜잭션) — 화면의 state.cash 가 살짝 낡았어도 '실제 가용 현금'만큼만 옮긴다.
-  // (전부 거절하지 않고 가용액으로 클램프 → "최대 입금"이 잔돈 오차로 실패하던 문제 해결)
+  // 현금 차감(트랜잭션). 핵심: 첫 호출은 로컬 캐시(미캐시 시 null)로 실행되는데,
+  // null 일 때 0 으로 보고 undefined 를 반환하면 Firebase 가 '중단'으로 확정해 서버값으로 재시도하지 않는다.
+  // → null 이면 state.cash 를 fallback 으로 사용해 거짓 중단을 막는다(가용액만큼 클램프).
   let moved = 0;
+  const fallback = int(state.cash);
   const res = await runTransaction(cashRef(uid), (c) => {
-    c = int(c);
-    moved = Math.min(amount, c);
-    if (moved <= 0) return;           // 현금이 0일 때만 중단
-    return c - moved;
+    const base = (c === null || c === undefined) ? fallback : int(c);
+    moved = Math.min(amount, base);
+    if (moved <= 0) return;           // 실제 현금이 0일 때만 중단
+    return base - moved;
   });
   if (!res.committed || moved <= 0) throw new Error("보유 현금이 없습니다.");
   const beforeCash = int((res.snapshot && res.snapshot.val()) ?? state.cash) + moved;
@@ -293,7 +295,8 @@ export async function openFixed(uid, productId, amount, state) {
   if (amount <= 0) throw new Error("금액을 확인하세요.");
   if (amount > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
   let bank = await commitSettle(uid, { ...state.bank }, state.cash);
-  const res = await runTransaction(cashRef(uid), (c) => { c = int(c); if (c < amount) return; return c - amount; });
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); if (base < amount) return; return base - amount; });
   if (!res.committed) throw new Error("보유 현금이 부족합니다.");
   const now = Date.now();
   const id = "f" + now.toString(36);
@@ -363,8 +366,9 @@ export async function repayLoan(uid, amount, state) {
   const totalOwed = int(bank.loanPrincipal) + int(bank.loanInterest);
   if (totalOwed <= 0) throw new Error("상환할 대출이 없습니다.");
   const pay = Math.min(amount, totalOwed); // 빚보다 많이 내지 않음
-  // 현금 차감
-  const res = await runTransaction(cashRef(uid), (c) => { c = int(c); if (c < pay) return; return c - pay; });
+  // 현금 차감 (null 첫 실행 fallback 처리 — 거짓 중단 방지)
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); if (base < pay) return; return base - pay; });
   if (!res.committed) throw new Error("보유 현금이 부족합니다.");
   let remain = pay;
   const payInterest = Math.min(remain, int(bank.loanInterest));
@@ -479,7 +483,8 @@ export async function buyInsurance(uid, productId, state) {
   const now = Date.now();
   if (activeInsurances(bank, now).some((i) => i.type === productId)) throw new Error("이미 가입 중인 보험입니다.");
   if (prod.premium > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
-  const res = await runTransaction(cashRef(uid), (c) => { c = int(c); if (c < prod.premium) return; return c - prod.premium; });
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); if (base < prod.premium) return; return base - prod.premium; });
   if (!res.committed) throw new Error("보유 현금이 부족합니다.");
   const id = "ins" + now.toString(36);
   bank.insurances = bank.insurances || {};
@@ -499,7 +504,8 @@ export async function buyInvestment(uid, productId, amount, state) {
   if (amount <= 0) throw new Error("금액을 확인하세요.");
   if (amount > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
   let bank = await commitSettle(uid, { ...state.bank }, state.cash);
-  const res = await runTransaction(cashRef(uid), (c) => { c = int(c); if (c < amount) return; return c - amount; });
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); if (base < amount) return; return base - amount; });
   if (!res.committed) throw new Error("보유 현금이 부족합니다.");
   const now = Date.now();
   const id = "inv" + now.toString(36);
@@ -541,7 +547,8 @@ export async function depositVip(uid, amount, state) {
   if (amount <= 0) throw new Error("금액을 확인하세요.");
   let bank = await commitSettle(uid, { ...state.bank }, state.cash);
   let moved = 0;
-  const res = await runTransaction(cashRef(uid), (c) => { c = int(c); moved = Math.min(amount, c); if (moved <= 0) return; return c - moved; });
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (c) => { const base = (c == null) ? fb : int(c); moved = Math.min(amount, base); if (moved <= 0) return; return base - moved; });
   if (!res.committed || moved <= 0) throw new Error("보유 현금이 없습니다.");
   bank.vipVaultBalance = Math.max(0, int(bank.vipVaultBalance) + moved);
   bank = computeVip(bank, state.cash);
