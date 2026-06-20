@@ -1,0 +1,19 @@
+{
+  "name": "stonk-bank",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build --base=./",
+    "preview": "vite preview --host 0.0.0.0",
+    "deploy": "npm run build && gh-pages -d dist --repo https://github.com/tom981105-web/STONK-Bank.git"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0",
+    "gh-pages": "^6.1.1"
+  },
+  "dependencies": {
+    "firebase": "^10.12.2"
+  }
+}
