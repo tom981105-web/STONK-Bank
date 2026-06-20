@@ -6,8 +6,12 @@ import * as Bank from "./services/bank.js";
 
 const { won, int, num, fixedTotal, netWorth, gradeFromScore, loanLimit, FIXED_PRODUCTS } = Bank;
 
+const ADMIN_UID = "yaV8N60yIiUggaWNpNF2VhkCwxb2";
+const ADMIN_EMAIL = "tomem@naver.com";
+
 const app = document.getElementById("app");
 let state = null;     // { uid, cash, nickname, bank, tx }
+let isAdmin = false;  // 관리자 네비 노출 여부 (boot 에서 1회 결정 · reload 후에도 유지)
 let tab = "dashboard";
 let busy = false;
 
@@ -25,6 +29,7 @@ async function boot() {
     return;
   }
   try {
+    isAdmin = (user.uid === ADMIN_UID || String(user.email || "").toLowerCase() === ADMIN_EMAIL);
     state = await Bank.loadState(user.uid);
     render();
   } catch (e) {
@@ -78,11 +83,14 @@ function render() {
   const grade = gradeFromScore(b.creditScore);
   app.innerHTML = `
     <header class="bk-header">
-      <a class="bk-brand" href="../STONK-Home/index.html" title="STONK Home"><span class="bk-mark">$</span><b>STONK</b> Bank</a>
+      <a class="bk-brand" href="#" data-home title="STONK Bank 메인"><span class="bk-mark">$</span><b>STONK</b> Bank</a>
       <div class="bk-nav">
         <a href="../STONK-Battle/index.html">주식시장</a>
+        <a href="../STONK-Board/index.html">주식소식</a>
+        <a href="../STONK-Wiki/index.html">주식정보</a>
+        <a href="../STONK-Arcade/index.html">아케이드</a>
         <a href="../STONK-Gacha/index.html">가챠</a>
-        <a href="../STONK-Home/index.html">홈</a>
+        ${isAdmin ? `<a href="../STONK-Admin/market-admin.html">관리자</a>` : ""}
       </div>
       <div class="bk-user"><span class="bk-nick">${esc(state.nickname)}</span>${gradeBadge(grade)}</div>
     </header>
@@ -264,6 +272,8 @@ function fmtTime(t) {
 
 // ---------- 바인딩 ----------
 function bind() {
+  const home = app.querySelector("[data-home]");
+  if (home) home.addEventListener("click", (e) => { e.preventDefault(); tab = "dashboard"; window.scrollTo(0, 0); render(); });
   app.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.tab; render(); }));
   app.querySelectorAll("[data-fill]").forEach((b) => b.addEventListener("click", () => fillMax(b.dataset.fill)));
   app.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => onAct(b.dataset.act)));
