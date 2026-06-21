@@ -246,3 +246,51 @@ b { font-variant-numeric: tabular-nums; }
 #app.is-black .bk-header { border-bottom-color: #3a2f12; }
 #app.is-black .net-hero { border: 1px solid #3a2f12; box-shadow: 0 0 0 1px rgba(240,212,136,.15), 0 10px 30px rgba(0,0,0,.5); }
 .bk-card.black-card { border: 1px solid #3a2f12; background: linear-gradient(135deg, rgba(240,212,136,.06), #14151c); }
+
+/* ════════ v2.9 ════════ */
+/* 금융 이벤트 배너 */
+.bk-event-banner { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 12px 15px; margin-bottom: 4px; border-radius: var(--radius-sm); border: 1px solid rgba(91,140,255,.35); background: linear-gradient(135deg, rgba(91,140,255,.10), rgba(54,211,153,.05)); animation: evslide .4s ease; }
+.bk-event-banner .bk-event-ico { font-size: 20px; }
+.bk-event-banner b { font-size: 14px; display: block; }
+.bk-event-banner small { font-size: 12px; color: var(--text2); }
+.bk-event-banner.ev-caution, .bk-event-banner.ev-highrate { border-color: rgba(245,177,74,.4); background: linear-gradient(135deg, rgba(245,177,74,.10), rgba(242,86,106,.05)); }
+.bk-event-banner.ev-bust { border-color: rgba(242,86,106,.4); }
+@keyframes evslide { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* STONK Card */
+.stonk-card { position: relative; border-radius: 14px; padding: 16px 16px 14px; color: #fff; overflow: hidden; margin-bottom: 10px;
+  background: linear-gradient(135deg, #2b3346, #1a1f2c); border: 1px solid #333b4d; min-height: 150px; display: flex; flex-direction: column; justify-content: space-between; }
+.stonk-card.compact { min-height: 120px; padding: 13px; }
+.stonk-card.tier-GOLD { background: linear-gradient(135deg, #6e5a23, #3a2f12); border-color: #6e5a23; }
+.stonk-card.tier-PLATINUM { background: linear-gradient(135deg, #5a6675, #2f3744); border-color: #8794a6; }
+.stonk-card.tier-BLACK { background: linear-gradient(135deg, #1a1b22, #050507); border-color: #3a2f12; box-shadow: inset 0 0 30px rgba(240,212,136,.12); }
+.stonk-card.overdue { outline: 1px solid var(--red); }
+.stonk-card.suspended { opacity: .6; filter: grayscale(.4); }
+.stonk-card.near .sc-gauge span { background: var(--red); }
+.sc-top { display: flex; justify-content: space-between; align-items: center; }
+.sc-brand { font-weight: 900; letter-spacing: 1px; }
+.sc-tier { font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.14); }
+.stonk-card.tier-BLACK .sc-tier, .stonk-card.tier-GOLD .sc-tier { color: #f0d488; }
+.sc-num { font-family: Consolas, monospace; font-size: 15px; letter-spacing: 2px; opacity: .9; }
+.sc-foot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.sc-flag { color: #ffd3d8; background: rgba(242,86,106,.3); padding: 1px 7px; border-radius: 6px; font-size: 11px; }
+.sc-gauge { height: 6px; border-radius: 999px; background: rgba(255,255,255,.15); overflow: hidden; }
+.sc-gauge span { display: block; height: 100%; background: linear-gradient(90deg,#36d399,#e8c87a); transition: width .4s; }
+
+/* Activity Feed */
+.bk-activity { list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.bk-act { display: flex; align-items: center; gap: 9px; padding: 7px 2px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.bk-act:last-child { border-bottom: none; }
+.bk-act-ico { font-size: 15px; }
+.bk-act-text { flex: 1; min-width: 0; }
+.bk-act-time { color: var(--muted); font-size: 11px; font-style: normal; }
+
+/* 고액 거래 모달 */
+.bk-modal-dim { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 400; padding: 20px; animation: evslide .15s ease; }
+.bk-modal { width: min(380px, 100%); background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; text-align: center; box-shadow: var(--shadow); }
+.bk-modal h3 { font-size: 16px; }
+.bk-modal-amt { font-size: 28px; font-weight: 900; margin: 8px 0; font-variant-numeric: tabular-nums; }
+.bk-modal-stage { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 10px 0; color: var(--gold); font-weight: 700; }
+.bk-modal-btns { display: flex; gap: 8px; margin-top: 12px; }
+.bk-modal-btns .bk-btn { flex: 1; }
+@media (prefers-reduced-motion: reduce) { .bk-event-banner, .bk-modal-dim, .sc-gauge span { animation: none; transition: none; } }

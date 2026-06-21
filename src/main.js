@@ -12,6 +12,8 @@ const {
   buyInvestment, claimInvestment, vipTierLabel, vipVaultUnlocked, depositVip, withdrawVip,
   VIP_VAULT_RATE_DAY, VIP_VAULT_MIN_TIER, vipDiscount, vipVaultRate, vipRank,
   markMessageRead, markAllMessagesRead, unreadCount,
+  CARD_TIERS, CARD_TIER_ORDER, cardEligibleTier, cardCanIssue, cardRemaining,
+  issueCard, upgradeCard, payCard, restoreCard, eventEffects,
 } = Bank;
 
 const ADMIN_UID = "yaV8N60yIiUggaWNpNF2VhkCwxb2";
@@ -71,6 +73,30 @@ async function act(fn) {
   finally { busy = false; }
 }
 function fieldVal(id) { const el = document.getElementById(id); return el ? Math.floor(Number(el.value) || 0) : 0; }
+function prefersReduced() { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) { return false; } }
+// 고액 기준: 1,000만원 이상 또는 보유현금의 30% 이상
+function isHighValue(amount) { amount = Math.floor(Number(amount) || 0); return amount >= 10000000 || (state && state.cash > 0 && amount >= state.cash * 0.3); }
+function highValueAct(amount, label, fn) {
+  if (!isHighValue(amount)) return act(fn);
+  const dim = document.createElement("div");
+  dim.className = "bk-modal-dim";
+  dim.innerHTML = `<div class="bk-modal">
+    <h3>고액 거래 확인</h3>
+    <p class="bk-modal-amt">${won(amount)}</p>
+    <p class="bk-note">STONK 가상 게임머니 거래입니다. 진행하시겠어요?</p>
+    <div class="bk-modal-stage" hidden><span class="bk-spin"></span> <span class="bk-modal-label">${esc(label || "처리 중...")}</span></div>
+    <div class="bk-modal-btns"><button class="bk-btn" data-mc="cancel" type="button">취소</button><button class="bk-btn primary" data-mc="ok" type="button">확인</button></div>
+  </div>`;
+  document.body.appendChild(dim);
+  const close = () => dim.remove();
+  dim.querySelector('[data-mc="cancel"]').onclick = close;
+  dim.addEventListener("click", (e) => { if (e.target === dim) close(); });
+  dim.querySelector('[data-mc="ok"]').onclick = () => {
+    dim.querySelector(".bk-modal-btns").hidden = true;
+    dim.querySelector(".bk-modal-stage").hidden = false;
+    setTimeout(() => { close(); act(fn); }, prefersReduced() ? 0 : 600);
+  };
+}
 
 // ---------- 렌더 ----------
 function renderLoading() { app.innerHTML = `<div class="bk-center"><div class="bk-spin"></div><p>STONK Bank 연결 중…</p></div>`; }
@@ -119,7 +145,7 @@ function render() {
     </section>
 
     <nav class="bk-tabs">
-      ${["dashboard:대시보드", "deposit:예금", "loan:대출", "insurance:보험", "invest:투자", "vip:VIP", "messages:알림", "history:거래내역"].map((t) => {
+      ${["dashboard:대시보드", "deposit:예금", "loan:대출", "card:카드", "insurance:보험", "invest:투자", "vip:VIP", "messages:알림", "history:거래내역"].map((t) => {
         const [k, label] = t.split(":");
         return `<button class="bk-tab ${tab === k ? "active" : ""}" data-tab="${k}">${label}</button>`;
       }).join("")}
@@ -137,9 +163,80 @@ function tabBody(t) {
   if (t === "insurance") return insuranceTab();
   if (t === "invest") return investTab();
   if (t === "vip") return vipTab();
+  if (t === "card") return cardTab();
   if (t === "messages") return messagesTab();
   if (t === "history") return historyTab();
   return dashboardTab();
+}
+
+// ── 오늘의 금융 이벤트 ──
+function eventBanner() {
+  const ev = state.event; if (!ev) return "";
+  return `<div class="bk-event-banner ev-${esc(ev.type)}">
+    <span class="bk-event-ico">📰</span>
+    <div><b>오늘의 금융 이벤트 · ${esc(ev.title)}</b><small>${esc(ev.desc)} <i class="muted">(게임머니 금융 이벤트)</i></small></div>
+  </div>`;
+}
+
+// ── STONK Card ──
+const CARD_LABEL = { BASIC: "BASIC", GOLD: "GOLD", PLATINUM: "PLATINUM", BLACK: "BLACK" };
+function cardObj() { return (state.bank && state.bank.card) || {}; }
+function cardVisual(c, compact) {
+  const tier = c.cardTier || "BASIC";
+  const used = int(c.usedAmount), limit = int(c.cardLimit) || 1;
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  const danger = c.suspended ? "suspended" : c.overdue ? "overdue" : pct >= 80 ? "near" : "";
+  return `<div class="stonk-card tier-${tier} ${danger} ${compact ? "compact" : ""}">
+    <div class="sc-top"><span class="sc-brand">STONK</span><span class="sc-tier">${CARD_LABEL[tier] || tier}</span></div>
+    <div class="sc-num">•••• •••• •••• ${String(1000 + (pct % 9000)).slice(-4)}</div>
+    <div class="sc-foot"><span>사용 ${won(used)} / 한도 ${won(c.cardLimit)}</span>${c.suspended ? `<b class="sc-flag">정지</b>` : c.overdue ? `<b class="sc-flag">미납</b>` : ""}</div>
+    <div class="sc-gauge"><span style="width:${pct}%"></span></div>
+  </div>`;
+}
+function cardTab() {
+  const c = cardObj();
+  const elig = cardEligibleTier(state.bank);
+  const remain = cardRemaining(c);
+  const owed = Math.max(int(c.billingAmount), int(c.usedAmount));
+  const dueLeft = int(c.dueAt) > 0 ? Math.max(0, int(c.dueAt) - Date.now()) : 0;
+  if (!c.enabled) {
+    return `${eventBanner()}
+      <div class="bk-grid">
+        <div class="bk-card">
+          <h3>STONK Card 발급 <span class="bk-tag risk">게임머니 신용카드</span></h3>
+          <p class="bk-note">현금이 부족해도 한도 내에서 Gacha·Arcade 결제가 가능한 <b>게임머니 신용 결제 수단</b>입니다. 실제 결제가 아닙니다.</p>
+          ${CARD_TIER_ORDER.map((t) => {
+            const p = CARD_TIERS[t]; const ok = cardCanIssue(state.bank, t);
+            return `<label class="bk-product ${ok ? "" : "locked"}"><input type="radio" name="cardTier" value="${t}" ${t === elig ? "checked" : ""} ${ok ? "" : "disabled"}/>
+              <span><b>${p.title} ${ok ? `<small class="bk-tag safe">발급 가능</small>` : `<small class="bk-tag risk">조건 미달</small>`}</b>
+              <small>한도 ${won(p.limit)} · 조건 신용 ${p.minGrade}↑ 또는 VIP ${vipTierLabel(p.minVip)}↑ · ${esc(p.perk)}</small></span></label>`;
+          }).join("")}
+          <button class="bk-btn primary" data-act="cardIssue" ${elig ? "" : "disabled"}>${elig ? "카드 발급" : "발급 조건 미달"}</button>
+        </div>
+        <div class="bk-card"><h3>안내</h3><p class="bk-note">카드 사용액은 즉시 차감되지 않고 누적되어 <b>24시간 뒤 청구</b>됩니다. 청구 후 12시간 내 미납 시 신용점수가 하락하고, 미납이 누적되면 카드가 정지됩니다. 모든 금액은 STONK 가상 게임머니입니다.</p></div>
+      </div>`;
+  }
+  const upTier = CARD_TIER_ORDER[CARD_TIER_ORDER.indexOf(c.cardTier) + 1];
+  const canUp = upTier && cardCanIssue(state.bank, upTier) && !c.overdue && owed <= 0;
+  return `${eventBanner()}
+    <div class="bk-grid">
+      <div class="bk-card">
+        <h3>내 카드</h3>
+        ${cardVisual(c)}
+        <div class="bk-row"><span>남은 한도</span><b>${won(remain)}</b></div>
+        <div class="bk-row"><span>청구 예정/청구액</span><b class="${owed > 0 ? "warn" : ""}">${won(owed)}</b></div>
+        <div class="bk-row"><span>결제일</span><b>${int(c.dueAt) > 0 ? (dueLeft > 0 ? "D-" + fmtLeft(dueLeft) : "도래(납부 필요)") : "이용 없음"}</b></div>
+        <div class="bk-row"><span>상태</span><b>${c.suspended ? statusBadge("정지", "danger") : c.overdue ? statusBadge("미납", "danger") : statusBadge("정상", "ok")}</b></div>
+      </div>
+      <div class="bk-card">
+        <h3>납부 / 관리</h3>
+        <div class="bk-amount"><input id="cardPayAmt" type="number" inputmode="numeric" placeholder="납부 금액" min="1" /><span class="bk-suffix">원</span></div>
+        <div class="bk-quick"><button class="bk-btn ghost" data-fill="cardPayAmt:maxpay">전액(${won(owed)})</button></div>
+        <div class="bk-btnrow"><button class="bk-btn primary" data-act="cardPay" ${owed > 0 ? "" : "disabled"}>납부하기</button>
+          ${c.suspended ? `<button class="bk-btn" data-act="cardRestore">카드 복구</button>` : canUp ? `<button class="bk-btn" data-act="cardUpgrade" data-tier="${upTier}">${CARD_TIERS[upTier].title}로 업그레이드</button>` : `<button class="bk-btn" disabled>${owed > 0 ? "납부 후 업그레이드" : "최고 등급"}</button>`}</div>
+        <p class="bk-note">납부는 보유 현금에서 차감됩니다. 일부 납부도 가능합니다. 보유 현금 ${won(state.cash)} · 혜택: ${esc(CARD_TIERS[c.cardTier] ? CARD_TIERS[c.cardTier].perk : "")}</p>
+      </div>
+    </div>`;
 }
 
 const MSG_ICON = { insurance: "🛡️", investment: "📈", fixed: "🏦", vip: "👑", loan: "⚠️", admin: "🛠️", system: "🔔" };
@@ -199,7 +296,10 @@ function dashboardTab() {
   const invProfit = inv.reduce((a, v) => a + (Date.now() >= num(v.maturesAt) ? investOutcome(v).profit : 0), 0);
   const ins = activeInsurances(b);
   const preview = (state.tx || []).slice(0, 3);
+  const c = b.card || {};
+  const cardOwed = Math.max(int(c.billingAmount), int(c.usedAmount));
   return `
+    ${eventBanner()}
     ${feedBanner()}
     <div class="bk-grid">
       <div class="bk-card net-hero">
@@ -255,6 +355,16 @@ function dashboardTab() {
       </div>
 
       <div class="bk-card">
+        <h3>STONK Card <span class="bk-tag ${c.suspended ? "risk" : c.overdue ? "risk" : c.enabled ? "safe" : ""}">${c.enabled ? (c.suspended ? "정지" : c.overdue ? "미납" : "정상") : "미발급"}</span><button class="bk-btn ghost small" data-tab="card" style="float:right">카드</button></h3>
+        ${c.enabled ? cardVisual(c, true) + `<div class="bk-row"><span>청구 예정/청구</span><b class="${cardOwed > 0 ? "warn" : ""}">${won(cardOwed)}</b></div>` : `<p class="bk-empty">카드를 발급하면 한도 내 게임머니 신용 결제가 가능합니다.</p>`}
+      </div>
+
+      <div class="bk-card">
+        <h3>Activity Feed <small class="muted">최근 활동</small></h3>
+        ${activityFeed().length ? `<ul class="bk-activity">${activityFeed().slice(0, 8).map(activityRow).join("")}</ul>` : `<p class="bk-empty">최근 활동이 없습니다.</p>`}
+      </div>
+
+      <div class="bk-card">
         <h3>최근 거래 <button class="bk-btn ghost small" data-tab="history" style="float:right">전체 보기</button></h3>
         ${preview.length ? `<ul class="bk-tx mini">${preview.map(txRow).join("")}</ul>` : `<p class="bk-empty">거래내역이 없습니다.</p>`}
       </div>
@@ -263,6 +373,45 @@ function dashboardTab() {
 
 function statusBadge(label, tone) { return `<span class="bk-status ${tone}">${esc(label)}</span>`; }
 function vipBadge(tier) { return `<span class="bk-vip v-${tier || "NORMAL"}">${esc(vipTierLabel(tier))}</span>`; }
+
+// ── Activity Feed (기존 tx 기반, 추가 조회 없음) ──
+const ACT_ICON = { deposit: "🏦", withdraw: "🏧", fixedOpen: "📦", fixedCancel: "📦", fixedClaim: "📦", loan: "📝", repay: "✅", interest: "💰", loanInterest: "⚠️", vipInterest: "👑", insurance_buy: "🛡️", insurance_used: "🛡️", investment_buy: "📈", investment_settle: "📊", vip_deposit: "👑", vip_withdraw: "👑", vip_tier_up: "⭐", card_issue: "💳", card_upgrade: "💳", card_use: "💳", card_pay: "✅", card_bill: "🧾", card_overdue: "🚨", card_suspend: "⛔", card_restore: "🔓", admin_adjust: "🛠️" };
+function activityText(t) {
+  const amt = int(t.amount);
+  switch (t.type) {
+    case "deposit": return `예금 ${won(amt)}이 금고에 보관되었습니다.`;
+    case "withdraw": return `예금 ${won(Math.abs(amt))}을 인출했습니다.`;
+    case "loan": return `대출 ${won(amt)}이 승인되었습니다.`;
+    case "repay": return `대출 ${won(Math.abs(amt))}을 상환했습니다.`;
+    case "fixedClaim": return `정기예금 ${won(amt)}을 수령했습니다.`;
+    case "investment_settle": return `${t.title}${t.memo ? " · " + t.memo : ""}`;
+    case "insurance_used": return `${t.title}.`;
+    case "card_issue": return `STONK Card가 발급되었습니다.`;
+    case "card_use": return `STONK Card 결제가 승인되었습니다. (${won(amt)})`;
+    case "card_pay": return `카드 청구액 ${won(Math.abs(amt))}이 납부되었습니다.`;
+    case "card_overdue": return `카드 미납이 발생했습니다.`;
+    case "vip_tier_up": return `VIP 등급이 상승했습니다.${t.memo ? " (" + t.memo + ")" : ""}`;
+    default: return `${t.title || t.type}${amt ? " · " + (amt >= 0 ? "+" : "−") + won(Math.abs(amt)) : ""}`;
+  }
+}
+function activityFeed() { return (state.tx || []).slice(0, 12); }
+function activityRow(t) { return `<li class="bk-act"><span class="bk-act-ico">${ACT_ICON[t.type] || "•"}</span><span class="bk-act-text">${esc(activityText(t))}</span><i class="bk-act-time">${fmtTime(t.createdAt)}</i></li>`; }
+
+// ── 보험 통계(tx + insurances 기반, 추가 조회 없음) ──
+function insuranceStats() {
+  const tx = state.tx || [];
+  const inss = Object.values((state.bank && state.bank.insurances) || {});
+  const used = inss.filter((i) => i.status === "used").length;
+  const expired = inss.filter((i) => i.status === "expired").length;
+  let arcadeRefund = 0, gachaDust = 0, loanGrace = 0;
+  tx.forEach((t) => {
+    if (t.type !== "insurance_used") return;
+    if (/Arcade/.test(t.title || "")) arcadeRefund += int(t.amount);
+    else if (/Gacha/.test(t.title || "")) gachaDust += 1;
+    else if (/유예/.test(t.title || "")) loanGrace += 1;
+  });
+  return { total: inss.length, used, expired, arcadeRefund, gachaDust, loanGrace };
+}
 
 function depositTab() {
   const b = state.bank;
@@ -361,6 +510,7 @@ const TX_TYPE = {
   vipInterest: ["VIP이자", "in"], insurance_buy: ["보험가입", "out"], insurance_expired: ["보험만료", "out"], insurance_used: ["보험사용", "in"],
   investment_buy: ["투자가입", "out"], investment_settle: ["투자정산", "in"], investment_cancel: ["투자해지", "in"],
   vip_deposit: ["VIP입금", "in"], vip_withdraw: ["VIP출금", "out"], vip_tier_up: ["VIP승급", "in"],
+  card_issue: ["카드발급", "in"], card_upgrade: ["카드전환", "in"], card_use: ["카드결제", "out"], card_bill: ["카드청구", "out"], card_pay: ["카드납부", "out"], card_overdue: ["카드미납", "out"], card_suspend: ["카드정지", "out"], card_restore: ["카드복구", "in"], admin_adjust: ["관리자조정", "in"],
 };
 // 필터 → 해당 type 집합
 const TX_FILTERS = {
@@ -372,8 +522,9 @@ const TX_FILTERS = {
   insurance: ["insurance_buy", "insurance_expired", "insurance_used"],
   invest: ["investment_buy", "investment_settle", "investment_cancel"],
   vip: ["vip_deposit", "vip_withdraw", "vip_tier_up"],
+  card: ["card_issue", "card_upgrade", "card_use", "card_bill", "card_pay", "card_overdue", "card_suspend", "card_restore"],
 };
-const FILTER_LABELS = { all: "전체", deposit: "예금", fixed: "정기예금", loan: "대출", interest: "이자", insurance: "보험", invest: "투자", vip: "VIP" };
+const FILTER_LABELS = { all: "전체", deposit: "예금", fixed: "정기예금", loan: "대출", interest: "이자", insurance: "보험", invest: "투자", vip: "VIP", card: "카드" };
 
 function txRow(t) {
   const meta = TX_TYPE[t.type] || [t.type, "in"];
@@ -432,6 +583,14 @@ function insuranceTab() {
             : `<button class="bk-btn primary" data-buyins="${p.id}">${won(finalP)} 가입하기</button>`}
         </div>`;
       }).join("")}
+    </div>
+    <div class="bk-card">
+      <h3>보험 통계 <small class="muted">게임머니 보호 기능</small></h3>
+      ${(() => { const s = insuranceStats(); return `
+        <div class="bk-row"><span>총 가입 / 사용됨 / 만료</span><b>${s.total} / <span class="ok">${s.used}</span> / <span class="muted">${s.expired}</span></b></div>
+        <div class="bk-row"><span>Arcade 보험 총 환급액</span><b>${won(s.arcadeRefund)}</b></div>
+        <div class="bk-row"><span>Gacha 보호권 지급</span><b>${s.gachaDust}회</b></div>
+        <div class="bk-row"><span>대출 유예권 사용</span><b>${s.loanGrace}회</b></div>`; })()}
     </div>
     ${usedRecent.length ? `<div class="bk-card">
       <h3>최근 보험 적용 기록</h3>
@@ -594,6 +753,7 @@ function fillMax(spec) {
   else if (kind === "maxout") v = int(b.balance);
   else if (kind === "maxvip") v = int(b.vipVaultBalance);
   else if (kind === "maxloan") v = Math.max(0, loanLimit(gradeFromScore(b.creditScore)) - int(b.loanPrincipal));
+  else if (kind === "maxpay") { const c = b.card || {}; v = Math.min(int(state.cash), Math.max(int(c.billingAmount), int(c.usedAmount))); }
   el.value = v > 0 ? v : "";
 }
 
@@ -605,14 +765,26 @@ function onAct(a) {
     const prod = (app.querySelector('input[name="fixedProd"]:checked') || {}).value || "d1";
     return act(() => Bank.openFixed(state.uid, prod, fieldVal("fixedAmt"), state));
   }
-  if (a === "loan") return act(() => Bank.takeLoan(state.uid, fieldVal("loanAmt"), state));
-  if (a === "repay") return act(() => Bank.repayLoan(state.uid, fieldVal("repayAmt"), state));
+  if (a === "loan") { const v = fieldVal("loanAmt"); return highValueAct(v, "대출 심사 중...", () => Bank.takeLoan(state.uid, v, state)); }
+  if (a === "repay") { const v = fieldVal("repayAmt"); return highValueAct(v, "상환 처리 중...", () => Bank.repayLoan(state.uid, v, state)); }
   if (a === "buyInvest") {
     const prod = (app.querySelector('input[name="invProd"]:checked') || {}).value || "stable";
-    return act(() => buyInvestment(state.uid, prod, fieldVal("invAmt"), state));
+    const v = fieldVal("invAmt");
+    return highValueAct(v, "투자 계약 체결...", () => buyInvestment(state.uid, prod, v, state));
   }
   if (a === "vipDeposit") return act(() => depositVip(state.uid, fieldVal("vipAmt"), state));
   if (a === "vipWithdraw") return act(() => withdrawVip(state.uid, fieldVal("vipAmt"), state));
+  if (a === "cardIssue") {
+    const tier = (app.querySelector('input[name="cardTier"]:checked') || {}).value || cardEligibleTier(state.bank);
+    if (!tier) { toast("발급 가능한 카드 등급이 없습니다.", "err"); return; }
+    return act(() => issueCard(state.uid, tier, state));
+  }
+  if (a === "cardUpgrade") { const tier = (app.querySelector('[data-act="cardUpgrade"]') || {}).dataset?.tier; return act(() => upgradeCard(state.uid, tier, state)); }
+  if (a === "cardRestore") return act(() => restoreCard(state.uid, state));
+  if (a === "cardPay") {
+    const amt = fieldVal("cardPayAmt");
+    return highValueAct(amt, "카드 승인 확인 중...", () => payCard(state.uid, amt, state));
+  }
   if (a === "repayAll") {
     const total = int(b.loanPrincipal) + int(b.loanInterest);
     if (total <= 0) { toast("상환할 대출이 없습니다.", "err"); return; }

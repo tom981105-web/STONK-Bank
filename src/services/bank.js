@@ -66,6 +66,63 @@ export const VIP_INVESTMENT_PRODUCTS = {
   bsecret:{ id: "bsecret",title: "BLACK 시크릿 펀드",  ms: 48 * 3600 * 1000, min: -0.15, max: 0.20, risk: "매우 높음", requiredVipTier: "BLACK" },
 };
 
+// ───────────── v2.9: STONK Card(게임머니 신용카드) ─────────────
+export const CARD_BILLING_MS = 24 * 3600 * 1000;   // 결제 주기 24시간
+export const CARD_GRACE_MS = 12 * 3600 * 1000;     // 청구 후 미납 유예 12시간
+export const CARD_SUSPEND_OVERDUE = 3;             // 미납 3회 누적 시 정지
+// 등급: 신용등급 또는 VIP 등급 조건 중 하나만 충족하면 됨
+export const CARD_TIERS = {
+  BASIC:    { id: "BASIC",    title: "BASIC Card",    limit: 5000000,   minGrade: "B", minVip: "NORMAL", insExtra: 0,    perk: "기본 게임머니 신용카드" },
+  GOLD:     { id: "GOLD",     title: "GOLD Card",     limit: 20000000,  minGrade: "A", minVip: "GOLD",   insExtra: 0.02, perk: "보험 할인 +2% · 결제 알림 강화" },
+  PLATINUM: { id: "PLATINUM", title: "PLATINUM Card", limit: 50000000,  minGrade: "S", minVip: "PLATINUM", insExtra: 0,  perk: "카드 이용 시 VIP 점수 소폭 +" },
+  BLACK:    { id: "BLACK",    title: "BLACK Card",    limit: 100000000, minGrade: "S", minVip: "BLACK",  insExtra: 0,    perk: "BLACK 전용 디자인 · 프리미엄 효과" },
+};
+export const CARD_TIER_ORDER = ["BASIC", "GOLD", "PLATINUM", "BLACK"];
+const GRADE_RANK = { F: 0, D: 1, C: 2, B: 3, A: 4, S: 5 };
+export function gradeRank(g) { return GRADE_RANK[g] || 0; }
+
+// ───────────── v2.9: 금융 이벤트(게임머니 금리/분위기) ─────────────
+export const BANK_EVENTS = {
+  lowrate:   { id: "lowrate",   type: "lowrate",   title: "저금리 데이",     desc: "예금·대출 이자가 소폭 낮아집니다." },
+  highrate:  { id: "highrate",  type: "highrate",  title: "고금리 데이",     desc: "예금·대출 이자가 소폭 높아지고 대출 경고가 강해집니다." },
+  boom:      { id: "boom",      type: "boom",      title: "투자 호황",       desc: "신규 투자상품의 기대 상단이 소폭 올라갑니다." },
+  bust:      { id: "bust",      type: "bust",      title: "투자 침체",       desc: "신규 투자상품의 손실 가능성이 커지고 경고가 강해집니다." },
+  insurance: { id: "insurance", type: "insurance", title: "보험 우대 기간",  desc: "보험 가입비가 추가 5% 할인됩니다(총 할인 최대 20%)." },
+  cashback:  { id: "cashback",  type: "cashback",  title: "카드 캐시백 이벤트", desc: "카드 납부 시 VIP 점수가 소폭 증가합니다." },
+  vipweek:   { id: "vipweek",   type: "vipweek",   title: "VIP 우대 기간",   desc: "VIP 점수 획득과 VIP 금고 이자가 소폭 증가합니다." },
+  caution:   { id: "caution",   type: "caution",   title: "금융 경계주의보",  desc: "대출·카드 고액 사용 경고가 강화됩니다. (보상 없음)" },
+};
+export const BANK_EVENT_IDS = Object.keys(BANK_EVENTS);
+// 이벤트 효과(소폭). 한 곳에서만 관리.
+export function eventEffects(ev) {
+  const t = ev && ev.type;
+  const e = { depositMult: 1, loanMult: 1, insExtraDisc: 0, investMinAdd: 0, investMaxAdd: 0, vipVaultAdd: 0, vipGainMult: 1, cardCashbackVip: 0, warnBoost: false };
+  if (t === "lowrate") { e.depositMult = 0.7; e.loanMult = 0.7; }
+  else if (t === "highrate") { e.depositMult = 1.3; e.loanMult = 1.3; e.warnBoost = true; }
+  else if (t === "boom") { e.investMaxAdd = 0.03; }
+  else if (t === "bust") { e.investMinAdd = -0.05; e.warnBoost = true; }
+  else if (t === "insurance") { e.insExtraDisc = 0.05; }
+  else if (t === "cashback") { e.cardCashbackVip = 1; }
+  else if (t === "vipweek") { e.vipVaultAdd = 0.0005; e.vipGainMult = 1.2; }
+  else if (t === "caution") { e.warnBoost = true; }
+  return e;
+}
+// 날짜+방 seed 로 오늘의 기본 이벤트 결정(새로고침해도 불변). manual 이벤트가 있으면 그것을 우선.
+export function computeSeedEvent(dateKey) {
+  let h = 2166136261 >>> 0;
+  const s = "bankevt:" + String(dateKey);
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const id = BANK_EVENT_IDS[(h >>> 0) % BANK_EVENT_IDS.length];
+  return Object.assign({}, BANK_EVENTS[id], { seed: s, manual: false });
+}
+export function dateKeyKST(now) {
+  const d = new Date((now || Date.now()) + 9 * 3600 * 1000); // KST
+  return `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`;
+}
+let activeEvent = null; // loadState 에서 설정 → settleInterest/buyInsurance/buyInvestment 가 참조
+export function getActiveEvent() { return activeEvent; }
+export function setActiveEvent(ev) { activeEvent = ev || null; }
+
 // ── 숫자 방어 ──
 export function num(v) { const x = Number(v); return Number.isFinite(x) ? x : 0; }
 export function int(v) { return Math.trunc(num(v)); }
@@ -80,6 +137,30 @@ const cashRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/players/${uid}/cas
 const bankRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}`);
 const txListRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}/tx`);
 const msgListRef = (uid) => ref(getFirebase().db, `rooms/${ROOM}/bank/${uid}/messages`);
+const eventRef = () => ref(getFirebase().db, `rooms/${ROOM}/bankEvents/current`);
+
+// 카드 기본값(미발급)
+function defaultCard(now) {
+  return { enabled: false, cardTier: "", cardLimit: 0, usedAmount: 0, billingAmount: 0, dueAt: 0, lastBilledAt: 0, lastOverdueProcessedAt: 0, overdue: false, overdueCount: 0, suspended: false, createdAt: now || Date.now(), updatedAt: now || Date.now() };
+}
+function normalizeCard(raw, now) {
+  const c = (raw && typeof raw === "object") ? raw : {};
+  return {
+    enabled: !!c.enabled,
+    cardTier: c.cardTier || "",
+    cardLimit: Math.max(0, int(c.cardLimit)),
+    usedAmount: Math.max(0, int(c.usedAmount)),
+    billingAmount: Math.max(0, int(c.billingAmount)),
+    dueAt: int(c.dueAt),
+    lastBilledAt: int(c.lastBilledAt),
+    lastOverdueProcessedAt: int(c.lastOverdueProcessedAt),
+    overdue: !!c.overdue,
+    overdueCount: Math.max(0, int(c.overdueCount)),
+    suspended: !!c.suspended,
+    createdAt: int(c.createdAt) || now,
+    updatedAt: now,
+  };
+}
 
 // ── 기본 은행 데이터 ──
 export function defaultBank(now) {
@@ -87,7 +168,7 @@ export function defaultBank(now) {
     balance: 0, fixed: {}, loanPrincipal: 0, loanInterest: 0,
     creditScore: INIT_CREDIT, creditGrade: gradeFromScore(INIT_CREDIT),
     insurances: {}, investments: {},
-    vipScore: 0, vipTier: "NORMAL", vipVaultBalance: 0,
+    vipScore: 0, vipTier: "NORMAL", vipVaultBalance: 0, card: defaultCard(now),
     lastInterestSettledAt: now, lastVipSettledAt: now, createdAt: now, updatedAt: now,
   };
 }
@@ -108,6 +189,7 @@ function normalizeBank(raw, now) {
     vipScore: clampScore(b.vipScore),
     vipTier: b.vipTier || "NORMAL",
     vipVaultBalance: Math.max(0, int(b.vipVaultBalance)),
+    card: normalizeCard(b.card, now),
     lastInterestSettledAt: int(b.lastInterestSettledAt) || d.lastInterestSettledAt,
     lastVipSettledAt: int(b.lastVipSettledAt) || d.lastVipSettledAt,
     createdAt: int(b.createdAt) || now,
@@ -129,6 +211,7 @@ function pruneBank(b) {
     vipScore: clampScore(b.vipScore),
     vipTier: b.vipTier || "NORMAL",
     vipVaultBalance: Math.max(0, int(b.vipVaultBalance)),
+    card: normalizeCard(b.card, Date.now()),
     lastInterestSettledAt: int(b.lastInterestSettledAt),
     lastVipSettledAt: int(b.lastVipSettledAt) || int(b.lastInterestSettledAt),
     createdAt: int(b.createdAt),
@@ -142,12 +225,16 @@ export function settleInterest(bank, now) {
   const last = int(bank.lastInterestSettledAt) || now;
   const elapsed = Math.max(0, now - last);
   const days = elapsed / 86400000;
-  const freeInt = days > 0 ? Math.floor(num(bank.balance) * FREE_RATE_DAY * days) : 0;
-  const loanInt = days > 0 ? Math.floor(num(bank.loanPrincipal) * LOAN_RATE_DAY * days) : 0;
-  // VIP 금고 이자(별도 시계, 등급별 이자율)
+  // 오늘의 금융 이벤트(저금리/고금리/VIP우대)를 이자율에 소폭 반영
+  const ef = eventEffects(activeEvent);
+  const freeRate = FREE_RATE_DAY * ef.depositMult;
+  const loanRate = LOAN_RATE_DAY * ef.loanMult;
+  const freeInt = days > 0 ? Math.floor(num(bank.balance) * freeRate * days) : 0;
+  const loanInt = days > 0 ? Math.floor(num(bank.loanPrincipal) * loanRate * days) : 0;
+  // VIP 금고 이자(별도 시계, 등급별 이자율 + 이벤트 보너스)
   const vlast = int(bank.lastVipSettledAt) || last;
   const vdays = Math.max(0, now - vlast) / 86400000;
-  const vrate = vipVaultRate(bank.vipTier) || VIP_VAULT_RATE_DAY;
+  const vrate = (vipVaultRate(bank.vipTier) || VIP_VAULT_RATE_DAY) + ef.vipVaultAdd;
   const vipInt = vdays > 0 ? Math.floor(num(bank.vipVaultBalance) * vrate * vdays) : 0;
   const nb = { ...bank };
   if (freeInt > 0 || loanInt > 0) {
@@ -215,15 +302,20 @@ export function unreadCount(msgs) { return (msgs || []).filter((m) => m && !m.re
 export async function loadState(uid) {
   const { db } = getFirebase();
   const now = Date.now();
-  const [pSnap, bSnap, tSnap, mSnap] = await Promise.all([
+  const [pSnap, bSnap, tSnap, mSnap, eSnap] = await Promise.all([
     get(playerRef(uid)),
     get(bankRef(uid)),
     get(query(txListRef(uid), orderByKey(), limitToLast(20))),
-    get(query(msgListRef(uid), orderByKey(), limitToLast(50))),
+    get(query(msgListRef(uid), orderByKey(), limitToLast(60))),
+    get(eventRef()),
   ]);
   const pv = pSnap.val() || {};
   const cash = int(pv.cash);
   const nickname = pv.nickname || (bSnap.val() && bSnap.val().nickname) || "플레이어";
+
+  // 오늘의 금융 이벤트: manual(미만료) 우선, 없으면 날짜+방 seed. 설정 후 이자 정산이 반영하도록 먼저 적용.
+  const ev = resolveEvent(eSnap.val(), now);
+  setActiveEvent(ev);
 
   let bank = normalizeBank(bSnap.val(), now);
   const created = !bSnap.exists();
@@ -261,19 +353,84 @@ export async function loadState(uid) {
     ? Object.entries(mSnap.val()).map(([id, m]) => ({ id, ...m })).sort((a, b) => num(b.createdAt) - num(a.createdAt))
     : [];
 
-  // 이벤트 알림 생성(중복 방지: relatedId) + 만료 보험 정리 — 접속 시 1회
-  msgs = await processBankEvents(uid, bank, prevTier, msgs, now);
+  // 카드 청구/미납 처리(접속 시 1회, dueAt 기준 중복 방지)
+  const cardRes = processCard(bank, now);
+  if (cardRes.changed) {
+    if (cardRes.creditDelta) { bank.creditScore = clampScore(bank.creditScore + cardRes.creditDelta); bank.creditGrade = gradeFromScore(bank.creditScore); }
+    await update(bankRef(uid), pruneBank(bank));
+    for (const t of cardRes.tx) await addTx(uid, t);
+  }
+
+  // 이벤트 알림 생성(중복 방지: relatedId) + 만료 보험 정리 + 카드 알림 — 접속 시 1회
+  msgs = await processBankEvents(uid, bank, prevTier, msgs, now, cardRes.msgs);
+
+  // 알림 50개 초과 정리: 읽은 오래된 알림부터 삭제(unread 보존). 실패해도 진행.
+  try {
+    if (msgs.length > 50) {
+      const sorted = msgs.slice().sort((a, b) => num(b.createdAt) - num(a.createdAt));
+      const keep = new Set(sorted.slice(0, 50).map((m) => m.id));
+      const rm = sorted.filter((m) => m.id && !keep.has(m.id) && m.read && !String(m.id).startsWith("local-"));
+      if (rm.length) {
+        const upd = {}; rm.forEach((m) => { upd[m.id] = null; });
+        await update(msgListRef(uid), upd);
+        console.info("[bank] 오래된 알림 정리:", rm.length);
+        const rmSet = new Set(rm.map((m) => m.id));
+        msgs = msgs.filter((m) => !rmSet.has(m.id));
+      }
+    }
+  } catch (e) { console.warn("[bank] 알림 정리 실패:", e); }
 
   // 정산/만기 피드(0이면 UI 가 표시 안 함)
   const maturedFixed = Object.values(bank.fixed || {}).filter((f) => now >= num(f.maturesAt)).length;
   const maturedInvest = Object.values(bank.investments || {}).filter((v) => v && v.status !== "settled" && now >= num(v.maturesAt)).length;
   const feed = { freeInt: st.freeInt, loanInt: st.loanInt, vipInt: st.vipInt, maturedFixed, maturedInvest, applied: settled };
 
-  return { uid, cash, nickname, bank, tx, msgs, unread: unreadCount(msgs), feed, settledNow: settled };
+  return { uid, cash, nickname, bank, tx, msgs, unread: unreadCount(msgs), feed, event: ev, settledNow: settled };
+}
+
+// 이벤트 결정: manual(미만료) 우선, 없으면 날짜+방 seed
+export function resolveEvent(raw, now) {
+  now = now || Date.now();
+  if (raw && raw.manual && (!raw.expiresAt || num(raw.expiresAt) > now) && raw.type) {
+    return Object.assign({}, BANK_EVENTS[raw.type] || {}, raw);
+  }
+  return computeSeedEvent(dateKeyKST(now));
+}
+
+// 카드 청구/미납 처리(순수, bank.card 변경). dueAt 기준으로 1회만 적용(중복 방지).
+function processCard(bank, now) {
+  const res = { changed: false, creditDelta: 0, msgs: [], tx: [] };
+  const c = bank.card;
+  if (!c || !c.enabled) return res;
+  if (int(c.usedAmount) > 0 && int(c.dueAt) > 0 && now >= int(c.dueAt)) {
+    if (int(c.lastBilledAt) < int(c.dueAt)) {
+      c.billingAmount = int(c.usedAmount);
+      c.lastBilledAt = int(c.dueAt);
+      res.changed = true;
+      res.msgs.push({ type: "card", title: "카드 결제일 도착", body: `STONK Card 청구액 ${won(c.billingAmount)}(게임머니) 납부가 필요합니다.`, relatedId: "cardbill-" + c.dueAt, actionLabel: "카드 탭에서 납부" });
+      res.tx.push(txItem("card_bill", "카드 청구", c.billingAmount, 0, 0, "결제일 도래"));
+    }
+    if (int(c.billingAmount) > 0 && now >= int(c.dueAt) + CARD_GRACE_MS && int(c.lastOverdueProcessedAt) < int(c.dueAt)) {
+      c.overdue = true;
+      c.overdueCount = int(c.overdueCount) + 1;
+      c.lastOverdueProcessedAt = int(c.dueAt);
+      res.creditDelta -= 5;
+      res.changed = true;
+      let body = `STONK Card 청구액 ${won(c.billingAmount)} 미납으로 신용점수가 하락했습니다.`;
+      if (c.overdueCount >= CARD_SUSPEND_OVERDUE) {
+        c.suspended = true; body += " 미납 누적으로 카드가 정지되었습니다.";
+        res.msgs.push({ type: "card", title: "카드 사용 정지", body: "미납 누적으로 STONK Card 사용이 정지되었습니다. 전액 납부 후 복구할 수 있습니다.", relatedId: "cardsusp-" + c.dueAt });
+        res.tx.push(txItem("card_suspend", "카드 사용 정지", 0, 0, 0, `미납 ${c.overdueCount}회`));
+      }
+      res.msgs.push({ type: "card", title: "카드 미납 발생", body, relatedId: "cardover-" + c.dueAt });
+      res.tx.push(txItem("card_overdue", "카드 미납", 0, 0, 0, `청구 ${won(c.billingAmount)} 미납 · 신용 -5`));
+    }
+  }
+  return res;
 }
 
 // 접속 시 이벤트 알림 생성 + 만료 보험 status 정리. 같은 relatedId 알림은 중복 생성하지 않는다.
-async function processBankEvents(uid, bank, prevTier, msgs, now) {
+async function processBankEvents(uid, bank, prevTier, msgs, now, extraMsgs) {
   const seen = new Set((msgs || []).map((m) => m.relatedId).filter(Boolean));
   const out = [];
   const emit = async (o) => {
@@ -283,6 +440,9 @@ async function processBankEvents(uid, bank, prevTier, msgs, now) {
     await addMessage(uid, o);
     out.push({ id: "local-" + Math.random().toString(36).slice(2), ...item });
   };
+
+  // 카드 처리에서 발생한 알림(청구/미납/정지)
+  for (const m of (extraMsgs || [])) await emit(m);
 
   // 만료 보험 status 정리(active → expired) + 만료 알림
   const expUpdates = {};
@@ -505,6 +665,7 @@ function computeVip(bank, cash) {
   s += Object.keys(bank.insurances || {}).length ? 5 : 0;           // 보험 이용
   s += int(bank.loanPrincipal) === 0 ? 6 : 0;                       // 무대출
   s += Math.min(8, clampScore(bank.creditScore) >= 75 ? 8 : 0);     // 우량 신용
+  s = Math.round(s * eventEffects(activeEvent).vipGainMult);         // VIP 우대 이벤트 시 소폭 가산
   nb.vipScore = clampScore(s);
   nb.vipTier = vipTierFromScore(nb.vipScore);
   return nb;
@@ -524,7 +685,9 @@ function seededUnit(seed) { // 0~1
 // 투자 결과(만기): seed 로 [min,max] 안에서 비율 결정 → 가운데로 약간 치우치게(평균 기대 과도 방지)
 export function investProduct(id) { return INVESTMENT_PRODUCTS[id] || VIP_INVESTMENT_PRODUCTS[id] || null; }
 export function investOutcome(v) {
-  const p = investProduct(v.productType) || { min: num(v.expectedMinRate), max: num(v.expectedMaxRate) };
+  // 가입 시 저장된 기대 범위를 우선 사용(이벤트로 조정된 범위가 seed 와 함께 고정 → 새로고침 불변).
+  const base = investProduct(v.productType) || {};
+  const p = { min: v.expectedMinRate != null ? num(v.expectedMinRate) : num(base.min), max: v.expectedMaxRate != null ? num(v.expectedMaxRate) : num(base.max) };
   const u0 = seededUnit(v.seed);
   const u1 = seededUnit(v.seed + "x");
   const u = (u0 + u1) / 2; // 평균 두 번 → 종 모양(극단값 확률↓)
@@ -587,7 +750,10 @@ export async function buyInsurance(uid, productId, state) {
   const now = Date.now();
   if (activeInsurances(bank, now).some((i) => i.type === productId)) throw new Error("이미 가입 중인 보험입니다.");
   const tier = state.bank.vipTier || "NORMAL";
-  const disc = vipDiscount(tier);
+  // VIP 할인 + 보험 우대 이벤트 추가 할인(합산, 최대 20%) + GOLD↑ 카드 추가 2%
+  const ef = eventEffects(activeEvent);
+  const cardExtra = (state.bank.card && state.bank.card.enabled && CARD_TIERS[state.bank.card.cardTier]) ? CARD_TIERS[state.bank.card.cardTier].insExtra : 0;
+  const disc = Math.min(0.20, vipDiscount(tier) + ef.insExtraDisc + cardExtra);
   const premium = Math.max(1, Math.floor(prod.premium * (1 - disc))); // 할인해도 0원은 안 됨
   if (premium > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
   const fb = int(state.cash);
@@ -599,7 +765,7 @@ export async function buyInsurance(uid, productId, state) {
   bank = computeVip(bank, state.cash);
   await update(bankRef(uid), pruneBank(bank));
   const beforeCash = int(state.cash);
-  const memo = disc > 0 ? `VIP ${vipTierLabel(tier)} 할인 ${Math.round(disc * 100)}% 적용` : "";
+  const memo = disc > 0 ? `할인 ${Math.round(disc * 100)}% 적용${ef.insExtraDisc > 0 ? " (보험 우대 이벤트 포함)" : ""}` : "";
   await addTx(uid, txItem("insurance_buy", `${prod.title} 가입`, -premium, beforeCash, beforeCash - premium, memo));
   await addMessage(uid, { type: "insurance", title: "보험 가입 완료", body: `${prod.title}에 가입했습니다.${memo ? " (" + memo + ")" : ""}`, amount: -premium, relatedId: "insbuy-" + id });
   return `${prod.title} 가입 완료${disc > 0 ? ` · ${Math.round(disc * 100)}% 할인` : ""}`;
@@ -622,17 +788,22 @@ export async function buyInvestment(uid, productId, amount, state) {
   const now = Date.now();
   const id = "inv" + now.toString(36);
   const seed = uid + ":" + id + ":" + now;
+  // 투자 호황/침체 이벤트를 '가입 시점'에만 기대 범위에 소폭 반영하고 저장 → seed 결과 고정.
+  const ef = eventEffects(activeEvent);
+  const minR = num(prod.min) + ef.investMinAdd;
+  const maxR = num(prod.max) + ef.investMaxAdd;
   bank.investments = bank.investments || {};
   bank.investments[id] = {
     id, productType: productId, title: prod.title, principal: amount,
-    expectedMinRate: prod.min, expectedMaxRate: prod.max, status: "active",
+    expectedMinRate: minR, expectedMaxRate: maxR, status: "active",
     seed, startedAt: now, maturesAt: now + prod.ms, resultRate: null, resultAmount: null, settledAt: 0, createdAt: now,
   };
   bank = computeVip(bank, state.cash);
   await update(bankRef(uid), pruneBank(bank));
   const beforeCash = int(state.cash);
-  await addTx(uid, txItem("investment_buy", `${prod.title} 가입`, -amount, beforeCash, beforeCash - amount, `위험도 ${prod.risk}`));
-  return `${prod.title} 가입 완료`;
+  const evMemo = (ef.investMinAdd || ef.investMaxAdd) ? ` · ${activeEvent.title} 반영` : "";
+  await addTx(uid, txItem("investment_buy", `${prod.title} 가입`, -amount, beforeCash, beforeCash - amount, `위험도 ${prod.risk}${evMemo}`));
+  return `${prod.title} 가입 완료${evMemo}`;
 }
 export async function claimInvestment(uid, invId, state) {
   let bank = await commitSettle(uid, { ...state.bank }, state.cash);
@@ -684,3 +855,101 @@ export async function withdrawVip(uid, amount, state) {
   await addTx(uid, txItem("vip_withdraw", "VIP 금고 출금", amount, beforeCash, beforeCash + amount, ""));
   return "VIP 금고 출금 완료";
 }
+
+// ════════════════════════════ v2.9: STONK Card ════════════════════════════
+
+// 사용자가 자격되는 최고 카드 등급(신용등급 또는 VIP 등급 조건 중 하나만 충족하면 됨). 없으면 "".
+export function cardEligibleTier(bank) {
+  const grade = gradeFromScore(bank.creditScore);
+  const vt = bank.vipTier || "NORMAL";
+  let best = "";
+  for (const t of CARD_TIER_ORDER) {
+    const p = CARD_TIERS[t];
+    if (gradeRank(grade) >= gradeRank(p.minGrade) || vipRank(vt) >= vipRank(p.minVip)) best = t;
+  }
+  return best;
+}
+export function cardCanIssue(bank, tier) {
+  const p = CARD_TIERS[tier]; if (!p) return false;
+  const grade = gradeFromScore(bank.creditScore);
+  return gradeRank(grade) >= gradeRank(p.minGrade) || vipRank(bank.vipTier || "NORMAL") >= vipRank(p.minVip);
+}
+export function cardRemaining(card) { return Math.max(0, int(card && card.cardLimit) - int(card && card.usedAmount)); }
+
+// 카드 발급
+export async function issueCard(uid, tier, state) {
+  const bank = { ...state.bank };
+  if (bank.card && bank.card.enabled) throw new Error("이미 카드를 발급했습니다. 업그레이드를 이용하세요.");
+  const p = CARD_TIERS[tier];
+  if (!p) throw new Error("카드 등급을 선택하세요.");
+  if (!cardCanIssue(bank, tier)) throw new Error(`${p.title} 발급 조건(신용 ${p.minGrade}↑ 또는 VIP ${vipTierLabel(p.minVip)}↑)을 충족하지 않습니다.`);
+  const now = Date.now();
+  const card = Object.assign(defaultCard(now), { enabled: true, cardTier: tier, cardLimit: p.limit });
+  await update(bankRef(uid), { card });
+  await addTx(uid, txItem("card_issue", `${p.title} 발급`, 0, int(state.cash), int(state.cash), `한도 ${won(p.limit)}`));
+  await addMessage(uid, { type: "card", title: "STONK Card 발급 완료", body: `${p.title}(게임머니 신용카드)가 발급되었습니다. 한도 ${won(p.limit)}.`, relatedId: "cardissue-" + now });
+  return `${p.title} 발급 완료`;
+}
+
+// 카드 업그레이드(등급 변경 — 미사용/정상 상태에서만 권장)
+export async function upgradeCard(uid, tier, state) {
+  const bank = { ...state.bank };
+  if (!bank.card || !bank.card.enabled) throw new Error("먼저 카드를 발급하세요.");
+  const p = CARD_TIERS[tier];
+  if (!p) throw new Error("카드 등급을 선택하세요.");
+  if (!cardCanIssue(bank, tier)) throw new Error(`${p.title} 조건을 충족하지 않습니다.`);
+  if (int(bank.card.billingAmount) > 0 || bank.card.overdue) throw new Error("미납 청구액이 있으면 업그레이드할 수 없습니다.");
+  await update(bankRef(uid), { "card/cardTier": tier, "card/cardLimit": p.limit, "card/updatedAt": Date.now() });
+  await addTx(uid, txItem("card_upgrade", `${p.title} 전환`, 0, int(state.cash), int(state.cash), `한도 ${won(p.limit)}`));
+  await addMessage(uid, { type: "card", title: "카드 등급 변경", body: `${p.title}로 변경되었습니다. 한도 ${won(p.limit)}.`, relatedId: "cardup-" + Date.now() });
+  return `${p.title}로 변경 완료`;
+}
+
+// 카드 납부(현금→청구액 상환). 전액/일부 모두 허용.
+export async function payCard(uid, amount, state) {
+  let bank = await commitSettle(uid, { ...state.bank }, state.cash);
+  const c = bank.card;
+  if (!c || !c.enabled) throw new Error("카드가 없습니다.");
+  const owed = Math.max(int(c.billingAmount), int(c.usedAmount));
+  if (owed <= 0) throw new Error("납부할 청구액이 없습니다.");
+  let pay = Math.min(Math.max(0, int(amount)), owed);
+  if (pay <= 0) throw new Error("금액을 확인하세요.");
+  if (pay > int(state.cash)) throw new Error("보유 현금이 부족합니다.");
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (cv) => { const base = (cv == null) ? fb : int(cv); if (base < pay) return; return base - pay; });
+  if (!res.committed) throw new Error("보유 현금이 부족합니다.");
+  c.usedAmount = Math.max(0, int(c.usedAmount) - pay);
+  c.billingAmount = Math.max(0, int(c.billingAmount) - pay);
+  let fully = false;
+  if (c.usedAmount <= 0) { // 전액 완납 → 사이클 초기화 + 정지 해제 + 신용 소폭 +
+    c.usedAmount = 0; c.billingAmount = 0; c.overdue = false; c.dueAt = 0; c.lastBilledAt = 0; c.lastOverdueProcessedAt = 0; c.suspended = false;
+    bank.creditScore = clampScore(bank.creditScore + 1); fully = true;
+  } else if (c.billingAmount <= 0) { c.overdue = false; }
+  // 카드 캐시백 이벤트: 납부 시 VIP 점수 +1(비현금 보상)
+  const ef = eventEffects(activeEvent);
+  if (ef.cardCashbackVip > 0) bank.vipScore = clampScore(bank.vipScore + ef.cardCashbackVip);
+  // PLATINUM/BLACK 카드: 이용 시 VIP 소폭(여기선 납부 시 +0~ 유지) — 과도 방지로 생략
+  bank = computeVip(bank, state.cash);
+  bank.creditGrade = gradeFromScore(bank.creditScore);
+  await update(bankRef(uid), pruneBank(bank));
+  const beforeCash = int(state.cash);
+  await addTx(uid, txItem("card_pay", "카드 납부", -pay, beforeCash, beforeCash - pay, fully ? "전액 납부 완료" : `일부 납부 · 잔여 ${won(c.usedAmount)}`));
+  await addMessage(uid, { type: "card", title: "카드 납부 완료", body: `${won(pay)} 납부되었습니다.${fully ? " 청구액을 모두 정리했습니다." : ` 남은 청구 ${won(c.usedAmount)}.`}${ef.cardCashbackVip > 0 ? " (캐시백 이벤트: VIP+1)" : ""}`, amount: -pay, relatedId: "cardpay-" + Date.now() });
+  return fully ? "카드 전액 납부 완료" : `카드 납부 완료 (잔여 ${won(c.usedAmount)})`;
+}
+
+// 카드 복구(정지 해제) — 청구/미납이 모두 정리된 경우에만
+export async function restoreCard(uid, state) {
+  const bank = { ...state.bank };
+  const c = bank.card;
+  if (!c || !c.enabled) throw new Error("카드가 없습니다.");
+  if (!c.suspended) throw new Error("정지 상태가 아닙니다.");
+  if (int(c.usedAmount) > 0 || int(c.billingAmount) > 0 || c.overdue) throw new Error("미납 청구액을 먼저 정리하세요.");
+  await update(bankRef(uid), { "card/suspended": false, "card/overdueCount": 0, "card/updatedAt": Date.now() });
+  await addTx(uid, txItem("card_restore", "카드 사용 복구", 0, int(state.cash), int(state.cash), "정지 해제"));
+  await addMessage(uid, { type: "card", title: "카드 사용 복구", body: "STONK Card 사용이 복구되었습니다.", relatedId: "cardrestore-" + Date.now() });
+  return "카드 사용이 복구되었습니다";
+}
+
+// 관리자 투자 강제정산(Bank 모듈 외부에서도 동일 공식 사용 가능하도록 export)
+export function settleInvestmentValue(v) { return investOutcome(v); }
