@@ -15,6 +15,7 @@ const {
   CARD_TIERS, CARD_TIER_ORDER, cardEligibleTier, cardCanIssue, cardRemaining,
   issueCard, upgradeCard, payCard, restoreCard, eventEffects,
   cardMinPay, rateInfo, setAutoPay,
+  reportLostCard, reissueCard, reissueFee, cardStatement,
 } = Bank;
 
 const ADMIN_UID = "yaV8N60yIiUggaWNpNF2VhkCwxb2";
@@ -238,6 +239,37 @@ function vaultVisual(b) {
   </div>`;
 }
 
+// ── v3.0: Company 요약 + 사업대출 ──
+const CO_STAGE = { STARTUP: "스타트업", SMALL_BIZ: "소기업", SCALE_UP: "성장기업", ENTERPRISE: "대기업", PRE_IPO: "상장 준비", LISTED: "상장기업" };
+function companySummaryCard() {
+  const co = state.company;
+  const bl = (state.bank.businessLoan) || {};
+  const owed = int(bl.principal) + int(bl.interest);
+  if (!co) {
+    return `<div class="bk-card"><h3>STONK Company <span class="bk-tag">v3.0</span><a class="bk-btn ghost small" href="../STONK-Company/index.html" style="float:right">회사 경영</a></h3>
+      <p class="bk-empty">아직 설립한 회사가 없습니다. STONK Company에서 타이쿤 경영을 시작하세요.</p>
+      ${owed > 0 ? `<div class="bk-row"><span>사업대출 잔액(개인 대출과 별개)</span><b class="warn">${won(owed)}</b></div>` : ""}</div>`;
+  }
+  return `<div class="bk-card"><h3>STONK Company <span class="bk-tag safe">${esc(CO_STAGE[co.stage] || co.stage)}</span><a class="bk-btn ghost small" href="../STONK-Company/index.html" style="float:right">회사 경영</a></h3>
+    <div class="bk-row"><span>회사명</span><b>${esc(co.name)}</b></div>
+    <div class="bk-row"><span>회사 가치</span><b>${won(co.companyValue)}</b></div>
+    <div class="bk-row"><span>IPO 준비도</span><b>${int(co.ipoReadiness)}%</b></div>
+    <div class="bk-row"><span>사업대출(개인 대출과 별개)</span><b class="${owed > 0 ? "warn" : ""}">${owed > 0 ? won(owed) : "없음"}</b></div>
+  </div>`;
+}
+// ── v3.0: 이벤트 효과 시계열(최근 이력 막대) ──
+function eventHistoryCard() {
+  const hist = (state.eventHistory || []).slice(0, 7).reverse();
+  if (!hist.length) return `<div class="bk-card"><h3>이벤트 이력</h3><p class="bk-empty">최근 이벤트 기록 없음</p></div>`;
+  return `<div class="bk-card"><h3>최근 이벤트 이력 <small class="muted">금리 배율 변화</small></h3>
+    <div class="bk-evh">${hist.map((h) => {
+      const ef = h.effects || {}; const dep = num(ef.depositMult) || 1, loan = num(ef.loanMult) || 1;
+      return `<div class="evh-col" title="${esc(h.title || "")}"><div class="evh-bars"><i class="dep" style="height:${Math.min(100, dep * 55)}%"></i><i class="loan" style="height:${Math.min(100, loan * 55)}%"></i></div><small>${esc(String(h.title || "").slice(0, 4))}</small></div>`;
+    }).join("")}</div>
+    <p class="bk-note"><i class="evh-key dep"></i> 예금배율 <i class="evh-key loan"></i> 대출배율 · eventEffects 기준(게임머니)</p>
+  </div>`;
+}
+
 // ── STONK Card ──
 const CARD_LABEL = { BASIC: "BASIC", GOLD: "GOLD", PLATINUM: "PLATINUM", BLACK: "BLACK" };
 function cardObj() { return (state.bank && state.bank.card) || {}; }
@@ -262,11 +294,13 @@ function cardVisual(c, compact) {
   const tier = c.cardTier || "BASIC";
   const used = int(c.usedAmount), limit = int(c.cardLimit) || 1;
   const pct = Math.min(100, Math.round((used / limit) * 100));
-  const danger = c.suspended ? "suspended" : c.overdue ? "overdue" : pct >= 80 ? "near" : "";
+  const danger = c.lost ? "suspended" : c.suspended ? "suspended" : c.overdue ? "overdue" : pct >= 80 ? "near" : "";
+  const num4 = c.cardDisplayId ? esc(c.cardDisplayId).replace(/[^0-9]/g, "").slice(-4) || String(1000 + (pct % 9000)).slice(-4) : String(1000 + (pct % 9000)).slice(-4);
+  const flag = c.lost ? "분실" : c.suspended ? "정지" : c.overdue ? "미납" : "";
   return `<div class="stonk-card tier-${tier} ${danger} ${compact ? "compact" : ""}">
     <div class="sc-top"><span class="sc-brand">STONK</span><span class="sc-tier">${CARD_LABEL[tier] || tier}</span></div>
-    <div class="sc-num">•••• •••• •••• ${String(1000 + (pct % 9000)).slice(-4)}</div>
-    <div class="sc-foot"><span>사용 ${won(used)} / 한도 ${won(c.cardLimit)}</span>${c.suspended ? `<b class="sc-flag">정지</b>` : c.overdue ? `<b class="sc-flag">미납</b>` : ""}</div>
+    <div class="sc-num">•••• •••• •••• ${num4}</div>
+    <div class="sc-foot"><span>사용 ${won(used)} / 한도 ${won(c.cardLimit)}</span>${flag ? `<b class="sc-flag">${flag}</b>` : ""}</div>
     <div class="sc-gauge"><span style="width:${pct}%"></span></div>
   </div>`;
 }
@@ -305,10 +339,16 @@ function cardTab() {
         <div class="bk-row"><span>남은 한도</span><b>${won(remain)}</b></div>
         <div class="bk-row"><span>청구 예정/청구액</span><b class="${owed > 0 ? "warn" : ""}">${won(owed)}</b></div>
         <div class="bk-row"><span>결제일</span><b>${int(c.dueAt) > 0 ? (dueLeft > 0 ? "D-" + fmtLeft(dueLeft) : "도래(납부 필요)") : "이용 없음"}</b></div>
-        <div class="bk-row"><span>자동납부</span><b>${c.autoPayEnabled ? statusBadge("ON · 전액", "ok") : statusBadge("OFF", "muted")}</b></div>
-        <div class="bk-row"><span>상태</span><b>${c.suspended ? statusBadge("정지", "danger") : c.overdue ? statusBadge("미납", "danger") : statusBadge("정상", "ok")}</b></div>
-        <div class="bk-quick"><button class="bk-btn ghost" data-act="autoPayToggle">${c.autoPayEnabled ? "자동납부 끄기" : "자동납부 켜기(전액)"}</button></div>
-        <p class="bk-note">${c.autoPayEnabled ? "자동납부 ON — 결제일에 현금이 충분하면 청구액이 자동으로 납부됩니다." : "자동납부를 켜면 결제일에 현금이 충분할 때 청구액이 자동 납부됩니다."}</p>
+        <div class="bk-row"><span>자동납부</span><b>${c.autoPayEnabled ? statusBadge("ON · " + (c.autoPayMode === "minimum" ? "최소" : "전액"), "ok") : statusBadge("OFF", "muted")}</b></div>
+        <div class="bk-row"><span>상태</span><b>${c.lost ? statusBadge("분실", "danger") : c.suspended ? statusBadge("정지", "danger") : c.overdue ? statusBadge("미납", "danger") : statusBadge("정상", "ok")}</b></div>
+        <div class="bk-quick">
+          <button class="bk-btn ghost small ${c.autoPayEnabled && c.autoPayMode !== "minimum" ? "" : ""}" data-act="autoPayFull">${c.autoPayEnabled && c.autoPayMode === "full" ? "✓ 전액 자동납부" : "전액 자동납부"}</button>
+          <button class="bk-btn ghost small" data-act="autoPayMin">${c.autoPayEnabled && c.autoPayMode === "minimum" ? "✓ 최소 자동납부" : "최소 자동납부"}</button>
+          <button class="bk-btn ghost small" data-act="autoPayOff" ${c.autoPayEnabled ? "" : "disabled"}>끄기</button>
+        </div>
+        <p class="bk-note">${c.autoPayEnabled ? (c.autoPayMode === "minimum" ? "최소 자동납부 ON — 최소납부 후에도 남은 청구액이 있으면 청구 상태가 유지됩니다." : "전액 자동납부 ON — 결제일에 현금이 충분하면 청구액이 자동 납부됩니다.") : "자동납부를 켜면 결제일에 자동으로 납부됩니다."}</p>
+        <div class="bk-quick">${c.lost ? `<button class="bk-btn danger small" data-act="cardReissue">카드 재발급 (${won(reissueFee(c, state.bank))})</button>` : `<button class="bk-btn ghost small" data-act="cardLost">카드 분실 신고</button>`}</div>
+        ${c.lost ? `<p class="bk-note danger">분실 신고된 카드입니다. 재발급 전까지 Gacha/Arcade/Company 결제가 불가합니다. (게임머니 카드 시나리오)</p>` : ""}
       </div>
       <div class="bk-card">
         <h3>납부</h3>
@@ -325,7 +365,28 @@ function cardTab() {
         <p class="bk-note">최소납부 = max(청구 10%, 100만). <b>전액 납부 시</b> 미납·정지가 해제되고 신용이 소폭 회복됩니다. 혜택: ${esc(benefit)} · 모든 금액은 게임머니입니다.</p>
       </div>
     </div>
+    ${cardStatementCard()}
     ${cardHistoryCard()}`;
+}
+
+// ── 카드 월간 명세서(클라이언트 계산) ──
+function cardStatementCard() {
+  const c = state.bank.card || {};
+  const s = cardStatement(state.tx || [], c);
+  const maxCat = Math.max(1, s.cat.gacha, s.cat.arcade, s.cat.company, s.cat.etc);
+  const bar = (label, v, cls) => `<div class="bk-stmt-row"><span>${label}</span><div class="bk-stmt-bar"><i class="${cls}" style="width:${Math.round((v / maxCat) * 100)}%"></i></div><b>${won(v)}</b></div>`;
+  return `<div class="bk-card">
+    <h3>카드 명세서 <small class="muted">${esc(s.periodKey)} · 게임머니 사용 요약</small><button class="bk-btn ghost small" data-act="stmtRefresh" style="float:right">새로고침</button></h3>
+    <div class="bk-row"><span>이번 달 사용 / 납부</span><b>${won(s.used)} / ${won(s.paid)}</b></div>
+    <div class="bk-row"><span>미납액 / 사용 건수</span><b class="${s.overdue > 0 ? "warn" : ""}">${won(s.overdue)} · ${s.count}건</b></div>
+    <div class="bk-stmt">
+      ${bar("Gacha", s.cat.gacha, "g")}
+      ${bar("Arcade", s.cat.arcade, "a")}
+      ${bar("Company", s.cat.company, "c")}
+      ${bar("기타", s.cat.etc, "e")}
+    </div>
+    <p class="bk-note">실제 카드 명세서가 아닌 <b>게임머니 카드 사용 요약</b>입니다. 생성 ${fmtTime(s.generatedAt)}</p>
+  </div>`;
 }
 
 const CARD_HIST = [["all", "전체"], ["use", "사용"], ["bill", "청구"], ["pay", "납부"], ["risk", "미납/정지"]];
@@ -461,9 +522,12 @@ function dashboardTab() {
       </div>
 
       <div class="bk-card">
-        <h3>STONK Card <span class="bk-tag ${c.suspended ? "risk" : c.overdue ? "risk" : c.enabled ? "safe" : ""}">${c.enabled ? (c.suspended ? "정지" : c.overdue ? "미납" : "정상") : "미발급"}</span><button class="bk-btn ghost small" data-tab="card" style="float:right">카드</button></h3>
+        <h3>STONK Card <span class="bk-tag ${c.suspended ? "risk" : c.overdue ? "risk" : c.enabled ? "safe" : ""}">${c.enabled ? (c.lost ? "분실" : c.suspended ? "정지" : c.overdue ? "미납" : "정상") : "미발급"}</span><button class="bk-btn ghost small" data-tab="card" style="float:right">카드</button></h3>
         ${c.enabled ? cardVisual(c, true) + `<div class="bk-row"><span>청구 예정/청구</span><b class="${cardOwed > 0 ? "warn" : ""}">${won(cardOwed)}</b></div>` : `<p class="bk-empty">카드를 발급하면 한도 내 게임머니 신용 결제가 가능합니다.</p>`}
       </div>
+
+      ${companySummaryCard()}
+      ${eventHistoryCard()}
 
       <div class="bk-card">
         <h3>Activity Feed <small class="muted">최근 활동</small></h3>
@@ -617,6 +681,7 @@ const TX_TYPE = {
   investment_buy: ["투자가입", "out"], investment_settle: ["투자정산", "in"], investment_cancel: ["투자해지", "in"],
   vip_deposit: ["VIP입금", "in"], vip_withdraw: ["VIP출금", "out"], vip_tier_up: ["VIP승급", "in"],
   card_issue: ["카드발급", "in"], card_upgrade: ["카드전환", "in"], card_use: ["카드결제", "out"], card_bill: ["카드청구", "out"], card_pay: ["카드납부", "out"], card_overdue: ["카드미납", "out"], card_suspend: ["카드정지", "out"], card_restore: ["카드복구", "in"], admin_adjust: ["관리자조정", "in"],
+  biz_loan: ["사업대출", "in"], biz_repay: ["사업상환", "out"],
 };
 // 필터 → 해당 type 집합
 const TX_FILTERS = {
@@ -897,6 +962,12 @@ function onAct(a) {
   if (a === "cardUpgrade") { const tier = (app.querySelector('[data-act="cardUpgrade"]') || {}).dataset?.tier; return act(async () => { const r = await upgradeCard(state.uid, tier, state); cardFlip(tier); return r; }); }
   if (a === "cardRestore") return act(() => restoreCard(state.uid, state));
   if (a === "autoPayToggle") { const on = !((state.bank.card || {}).autoPayEnabled); return act(() => setAutoPay(state.uid, on, "full", state)); }
+  if (a === "autoPayFull") return act(() => setAutoPay(state.uid, true, "full", state));
+  if (a === "autoPayMin") return act(() => setAutoPay(state.uid, true, "minimum", state));
+  if (a === "autoPayOff") return act(() => setAutoPay(state.uid, false, "off", state));
+  if (a === "cardLost") { if (!confirm("카드를 분실 신고하면 즉시 사용이 정지됩니다. 진행할까요?")) return; return act(() => reportLostCard(state.uid, state)); }
+  if (a === "cardReissue") { const fee = reissueFee(state.bank.card, state.bank); if (!confirm(`카드 재발급 수수료 ${won(fee)}을 결제할까요? (게임머니)`)) return; return act(() => reissueCard(state.uid, state)); }
+  if (a === "stmtRefresh") { render(); return; }
   if (a === "cardPay") {
     const amt = fieldVal("cardPayAmt");
     return highValueAct(amt, "카드 승인 확인 중...", () => payCard(state.uid, amt, state));

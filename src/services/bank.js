@@ -155,7 +155,7 @@ const eventRef = () => ref(getFirebase().db, `rooms/${ROOM}/bankEvents/current`)
 
 // 카드 기본값(미발급)
 function defaultCard(now) {
-  return { enabled: false, cardTier: "", cardLimit: 0, usedAmount: 0, billingAmount: 0, dueAt: 0, lastBilledAt: 0, lastOverdueProcessedAt: 0, overdue: false, overdueCount: 0, suspended: false, autoPayEnabled: false, autoPayMode: "off", autoPayLastProcessedAt: 0, createdAt: now || Date.now(), updatedAt: now || Date.now() };
+  return { enabled: false, cardTier: "", cardLimit: 0, usedAmount: 0, billingAmount: 0, dueAt: 0, lastBilledAt: 0, lastOverdueProcessedAt: 0, overdue: false, overdueCount: 0, suspended: false, autoPayEnabled: false, autoPayMode: "off", autoPayLastProcessedAt: 0, lost: false, reissueCount: 0, cardDisplayId: "", lostAt: 0, reissuedAt: 0, createdAt: now || Date.now(), updatedAt: now || Date.now() };
 }
 function normalizeCard(raw, now) {
   const c = (raw && typeof raw === "object") ? raw : {};
@@ -174,6 +174,11 @@ function normalizeCard(raw, now) {
     autoPayEnabled: !!c.autoPayEnabled,
     autoPayMode: c.autoPayMode || (c.autoPayEnabled ? "full" : "off"),
     autoPayLastProcessedAt: int(c.autoPayLastProcessedAt),
+    lost: !!c.lost,
+    reissueCount: Math.max(0, int(c.reissueCount)),
+    cardDisplayId: c.cardDisplayId || "",
+    lostAt: int(c.lostAt),
+    reissuedAt: int(c.reissuedAt),
     createdAt: int(c.createdAt) || now,
     updatedAt: now,
   };
@@ -336,20 +341,34 @@ export function unreadCount(msgs) { return (msgs || []).filter((m) => m && !m.re
 export async function loadState(uid) {
   const { db } = getFirebase();
   const now = Date.now();
-  const [pSnap, bSnap, tSnap, mSnap, eSnap] = await Promise.all([
+  const [pSnap, bSnap, tSnap, mSnap, eSnap, coSnap, ehSnap] = await Promise.all([
     get(playerRef(uid)),
     get(bankRef(uid)),
     get(query(txListRef(uid), orderByKey(), limitToLast(20))),
     get(query(msgListRef(uid), orderByKey(), limitToLast(60))),
     get(eventRef()),
+    get(ref(db, `rooms/${ROOM}/companies/${uid}`)),                                   // v3.0: Company 요약
+    get(query(ref(db, `rooms/${ROOM}/bankEvents/history`), orderByKey(), limitToLast(7))), // v3.0: 이벤트 이력
   ]);
   const pv = pSnap.val() || {};
   const cash = int(pv.cash);
   const nickname = pv.nickname || (bSnap.val() && bSnap.val().nickname) || "플레이어";
+  const company = coSnap.exists() ? coSnap.val() : null;
+  const eventHistory = ehSnap.exists() ? Object.entries(ehSnap.val()).map(([id, e]) => ({ id, ...e })).sort((a, b) => num(b.startedAt || b.createdAt) - num(a.startedAt || a.createdAt)) : [];
 
   // 오늘의 금융 이벤트: manual(미만료) 우선, 없으면 날짜+방 seed. 설정 후 이자 정산이 반영하도록 먼저 적용.
   const ev = resolveEvent(eSnap.val(), now);
   setActiveEvent(ev);
+  // v3.0: 이벤트 이력 기록(날짜+type 키로 중복 방지). 이미 있으면 쓰지 않음.
+  try {
+    const evId = dateKeyKST(now) + "-" + (ev.type || "seed");
+    if (!eventHistory.some((h) => h.id === evId)) {
+      const ef = eventEffects(ev);
+      const rec = { eventId: evId, title: ev.title || ev.type || "이벤트", type: ev.type || "seed", effects: { depositMult: ef.depositMult, loanMult: ef.loanMult, insExtraDisc: ef.insExtraDisc, vipGainMult: ef.vipGainMult }, startedAt: now, expiresAt: int(ev.expiresAt) || 0, source: ev.manual ? "manual" : "seed", createdAt: now };
+      await update(ref(db, `rooms/${ROOM}/bankEvents/history/${evId}`), rec);
+      eventHistory.unshift(Object.assign({ id: evId }, rec));
+    }
+  } catch (e) { console.warn("[bank] 이벤트 이력 기록 실패:", e); }
 
   let bank = normalizeBank(bSnap.val(), now);
   const created = !bSnap.exists();
@@ -396,23 +415,30 @@ export async function loadState(uid) {
     for (const t of cardRes.tx) await addTx(uid, t);
   }
 
-  // 카드 자동납부(접속 시 1회, dueAt 기준 중복 방지) — 현금이 충분하면 전액 자동 납부
+  // 카드 자동납부(접속 시 1회, dueAt 기준 중복 방지). full=전액 / minimum=최소납부액만.
   const cc = bank.card;
   if (cc && cc.enabled && cc.autoPayEnabled && int(cc.dueAt) > 0 && now >= int(cc.dueAt) && int(cc.autoPayLastProcessedAt) < int(cc.dueAt)) {
     const dueKey = int(cc.dueAt);
     const owed = Math.max(int(cc.billingAmount), int(cc.usedAmount));
-    if (owed > 0) {
-      if (int(cash) >= owed) {
-        const r = await runTransaction(cashRef(uid), (cv) => { const base = (cv == null) ? int(cash) : int(cv); if (base < owed) return; return base - owed; });
+    const minimum = cc.autoPayMode === "minimum";
+    const pay = minimum ? cardMinPay(cc) : owed;
+    if (owed > 0 && pay > 0) {
+      if (int(cash) >= pay) {
+        const r = await runTransaction(cashRef(uid), (cv) => { const base = (cv == null) ? int(cash) : int(cv); if (base < pay) return; return base - pay; });
         if (r.committed) {
-          cc.usedAmount = 0; cc.billingAmount = 0; cc.overdue = false; cc.dueAt = 0; cc.lastBilledAt = 0; cc.lastOverdueProcessedAt = 0; cc.suspended = false; cc.autoPayLastProcessedAt = now;
-          bank.creditScore = clampScore(bank.creditScore + 1); bank.creditGrade = gradeFromScore(bank.creditScore);
+          cc.usedAmount = Math.max(0, int(cc.usedAmount) - pay);
+          cc.billingAmount = Math.max(0, int(cc.billingAmount) - pay);
+          cc.autoPayLastProcessedAt = now;
+          if (cc.usedAmount <= 0) { // 전액 완납 → 사이클 초기화 + 신용 소폭 회복
+            cc.usedAmount = 0; cc.billingAmount = 0; cc.overdue = false; cc.dueAt = 0; cc.lastBilledAt = 0; cc.lastOverdueProcessedAt = 0; cc.suspended = false;
+            bank.creditScore = clampScore(bank.creditScore + 1); bank.creditGrade = gradeFromScore(bank.creditScore);
+          } else if (cc.billingAmount <= 0) { cc.overdue = false; } // 청구분만 정리 → 미납 해제(완납 아님, 신용 회복 없음)
           await update(bankRef(uid), pruneBank(bank));
-          await addTx(uid, txItem("card_pay", "카드 자동납부", -owed, cash, cash - owed, "전액 자동납부"));
-          cardMsgs.push({ type: "card", title: "카드 자동납부 완료", body: `결제일에 청구액 ${won(owed)}이 자동으로 납부되었습니다.`, relatedId: "cardautopay-" + dueKey });
+          await addTx(uid, txItem("card_pay", minimum ? "카드 자동납부(최소)" : "카드 자동납부", -pay, cash, cash - pay, minimum ? `최소납부 · 잔여 ${won(cc.usedAmount)}` : "전액 자동납부"));
+          cardMsgs.push({ type: "card", title: minimum ? "카드 최소 자동납부 완료" : "카드 자동납부 완료", body: minimum ? `결제일에 최소납부액 ${won(pay)}이 자동 납부되었습니다. 남은 청구액 ${won(cc.usedAmount)}.` : `결제일에 청구액 ${won(pay)}이 자동으로 납부되었습니다.`, relatedId: "cardautopay-" + dueKey });
         }
       } else {
-        cc.autoPayLastProcessedAt = dueKey; // 이번 dueAt 자동납부 시도 기록(중복 실패 알림 방지)
+        cc.autoPayLastProcessedAt = dueKey; // 이번 dueAt 자동납부 시도 기록(중복 실패·신용하락 방지)
         await update(bankRef(uid), { "card/autoPayLastProcessedAt": dueKey });
         cardMsgs.push({ type: "card", title: "카드 자동납부 실패", body: `현금 부족으로 자동납부에 실패했습니다. 청구액 ${won(owed)}을 수동 납부해 주세요.`, relatedId: "cardautofail-" + dueKey });
       }
@@ -443,7 +469,7 @@ export async function loadState(uid) {
   const maturedInvest = Object.values(bank.investments || {}).filter((v) => v && v.status !== "settled" && now >= num(v.maturesAt)).length;
   const feed = { freeInt: st.freeInt, loanInt: st.loanInt, vipInt: st.vipInt, maturedFixed, maturedInvest, applied: settled };
 
-  return { uid, cash, nickname, bank, tx, msgs, unread: unreadCount(msgs), feed, event: ev, settledNow: settled };
+  return { uid, cash, nickname, bank, tx, msgs, unread: unreadCount(msgs), feed, event: ev, company, eventHistory, settledNow: settled };
 }
 
 // 이벤트 결정: manual(미만료) 우선, 없으면 날짜+방 seed
@@ -1007,6 +1033,60 @@ export async function restoreCard(uid, state) {
   await addTx(uid, txItem("card_restore", "카드 사용 복구", 0, int(state.cash), int(state.cash), "정지 해제"));
   await addMessage(uid, { type: "card", title: "카드 사용 복구", body: "STONK Card 사용이 복구되었습니다.", relatedId: "cardrestore-" + Date.now() });
   return "카드 사용이 복구되었습니다";
+}
+
+// ── 카드 분실 / 재발급 (게임머니 카드 시나리오) ──
+export const CARD_REISSUE_FEE = { BASIC: 500000, GOLD: 1000000, PLATINUM: 2000000, BLACK: 5000000 };
+export function reissueFee(card, bank) {
+  let fee = CARD_REISSUE_FEE[(card && card.cardTier) || "BASIC"] || 500000;
+  if ((bank && bank.vipTier) === "BLACK") fee = Math.floor(fee * 0.5); // BLACK VIP 50% 할인
+  return fee;
+}
+function newCardDisplayId() { return "•••• " + String(1000 + Math.floor(Math.random() * 9000)); }
+export async function reportLostCard(uid, state) {
+  const c = state.bank && state.bank.card;
+  if (!c || !c.enabled) throw new Error("카드가 없습니다.");
+  if (c.lost) throw new Error("이미 분실 신고된 카드입니다.");
+  const now = Date.now();
+  await update(bankRef(uid), { "card/lost": true, "card/lostAt": now, "card/updatedAt": now });
+  await addTx(uid, txItem("card_suspend", "카드 분실 신고", 0, int(state.cash), int(state.cash), "즉시 사용 정지(분실)"));
+  await addMessage(uid, { type: "card", title: "카드 분실 신고 접수", body: "STONK Card가 분실 신고되어 즉시 사용이 정지되었습니다. 재발급하면 다시 사용할 수 있습니다. (게임머니 카드 시나리오)", relatedId: "cardlost-" + now });
+  return "카드 분실 신고 완료 — 즉시 사용 정지되었습니다.";
+}
+export async function reissueCard(uid, state) {
+  const c = state.bank && state.bank.card;
+  if (!c || !c.enabled) throw new Error("카드가 없습니다.");
+  if (!c.lost) throw new Error("분실 신고된 카드만 재발급할 수 있습니다.");
+  const fee = reissueFee(c, state.bank);
+  if (fee > int(state.cash)) throw new Error("재발급 수수료를 낼 현금이 부족합니다.");
+  const fb = int(state.cash);
+  const res = await runTransaction(cashRef(uid), (cv) => { const base = (cv == null) ? fb : int(cv); if (base < fee) return; return base - fee; });
+  if (!res.committed) throw new Error("재발급 수수료를 낼 현금이 부족합니다.");
+  const now = Date.now();
+  await update(bankRef(uid), { "card/lost": false, "card/reissueCount": int(c.reissueCount) + 1, "card/cardDisplayId": newCardDisplayId(), "card/reissuedAt": now, "card/lostAt": 0, "card/updatedAt": now });
+  const beforeCash = int(state.cash);
+  await addTx(uid, txItem("card_restore", "카드 재발급", -fee, beforeCash, beforeCash - fee, `수수료 ${won(fee)} · 등급/사용액 유지`));
+  await addMessage(uid, { type: "card", title: "카드 재발급 완료", body: `STONK Card가 재발급되었습니다(수수료 ${won(fee)}). 등급·사용액·청구액은 그대로 유지됩니다.`, amount: -fee, relatedId: "cardreissue-" + now });
+  return "카드 재발급 완료";
+}
+
+// ── 카드 월간 명세서(기존 tx 클라이언트 계산, 추가 조회 없음) ──
+export function cardStatement(tx, card, periodKey) {
+  const now = Date.now();
+  const key = periodKey || (() => { const d = new Date(now); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); })();
+  const inPeriod = (t) => { const d = new Date(num(t.createdAt) || 0); return (d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")) === key; };
+  let used = 0, paid = 0, count = 0;
+  const cat = { gacha: 0, arcade: 0, company: 0, etc: 0 };
+  (tx || []).forEach((t) => {
+    if (!inPeriod(t)) return;
+    if (t.type === "card_use") {
+      const a = Math.abs(int(t.amount)); used += a; count++;
+      const s = (t.title || "") + " " + (t.memo || "");
+      if (/Gacha/i.test(s)) cat.gacha += a; else if (/Arcade/i.test(s)) cat.arcade += a; else if (/Company/i.test(s)) cat.company += a; else cat.etc += a;
+    } else if (t.type === "card_pay") { paid += Math.abs(int(t.amount)); }
+  });
+  const owed = Math.max(int(card && card.billingAmount), int(card && card.usedAmount));
+  return { periodKey: key, used, paid, overdue: (card && card.overdue) ? owed : 0, count, cat, generatedAt: now };
 }
 
 // 카드 자동납부 설정 토글

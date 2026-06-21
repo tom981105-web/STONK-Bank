@@ -331,3 +331,22 @@ b { font-variant-numeric: tabular-nums; }
 /* 투자 진행률 */
 .inv-progress { height: 5px; border-radius: 999px; background: var(--bg2); overflow: hidden; margin-top: 6px; }
 .inv-progress span { display: block; height: 100%; background: linear-gradient(90deg,#5b8cff,#36d399); }
+
+/* ════════ v3.0 ════════ */
+/* 카드 명세서 막대 */
+.bk-stmt { margin: 8px 0; }
+.bk-stmt-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 12px; }
+.bk-stmt-row span { width: 56px; color: var(--text2); }
+.bk-stmt-bar { flex: 1; height: 8px; border-radius: 999px; background: var(--bg2); overflow: hidden; }
+.bk-stmt-bar i { display: block; height: 100%; }
+.bk-stmt-bar i.g { background: #e8c87a; } .bk-stmt-bar i.a { background: #36d399; } .bk-stmt-bar i.c { background: #5b8cff; } .bk-stmt-bar i.e { background: #6b7180; }
+.bk-stmt-row b { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+/* 이벤트 이력 막대 */
+.bk-evh { display: flex; gap: 8px; align-items: flex-end; height: 70px; padding: 4px 0; }
+.evh-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; height: 100%; justify-content: flex-end; }
+.evh-bars { display: flex; gap: 2px; align-items: flex-end; height: 56px; }
+.evh-bars i { width: 7px; border-radius: 3px 3px 0 0; min-height: 3px; }
+.evh-bars i.dep { background: #36d399; } .evh-bars i.loan { background: #f5b14a; }
+.evh-col small { font-size: 10px; color: var(--muted); }
+i.evh-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: middle; }
+i.evh-key.dep { background: #36d399; } i.evh-key.loan { background: #f5b14a; }
