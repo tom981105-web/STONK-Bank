@@ -95,8 +95,22 @@ export const BANK_EVENTS = {
 export const BANK_EVENT_IDS = Object.keys(BANK_EVENTS);
 // 이벤트 효과(소폭). 한 곳에서만 관리.
 export function eventEffects(ev) {
-  const t = ev && ev.type;
   const e = { depositMult: 1, loanMult: 1, insExtraDisc: 0, investMinAdd: 0, investMaxAdd: 0, vipVaultAdd: 0, vipGainMult: 1, cardCashbackVip: 0, warnBoost: false };
+  // 관리자 직접 수치 입력 이벤트(custom): effects 객체를 검증된 범위로 클램프해 사용
+  if (ev && ev.custom && ev.effects && typeof ev.effects === "object") {
+    const x = ev.effects, cl = (v, lo, hi, d) => { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
+    e.depositMult = cl(x.depositRateMultiplier, 0.5, 1.5, 1);
+    e.loanMult = cl(x.loanRateMultiplier, 0.5, 1.5, 1);
+    e.insExtraDisc = cl(x.insuranceExtraDiscount, 0, 0.10, 0);
+    e.investMinAdd = cl(x.investMinDelta, -0.10, 0.10, 0);
+    e.investMaxAdd = cl(x.investMaxDelta, -0.10, 0.10, 0);
+    e.vipGainMult = cl(x.vipScoreMultiplier, 1.0, 2.0, 1);
+    e.vipVaultAdd = cl(x.vipVaultBonusRate, 0, 0.001, 0);
+    e.cardCashbackVip = Math.round(cl(x.cardPayVipBonus, 0, 5, 0));
+    e.warnBoost = !!x.warnBoost;
+    return e;
+  }
+  const t = ev && ev.type;
   if (t === "lowrate") { e.depositMult = 0.7; e.loanMult = 0.7; }
   else if (t === "highrate") { e.depositMult = 1.3; e.loanMult = 1.3; e.warnBoost = true; }
   else if (t === "boom") { e.investMaxAdd = 0.03; }
@@ -141,7 +155,7 @@ const eventRef = () => ref(getFirebase().db, `rooms/${ROOM}/bankEvents/current`)
 
 // 카드 기본값(미발급)
 function defaultCard(now) {
-  return { enabled: false, cardTier: "", cardLimit: 0, usedAmount: 0, billingAmount: 0, dueAt: 0, lastBilledAt: 0, lastOverdueProcessedAt: 0, overdue: false, overdueCount: 0, suspended: false, createdAt: now || Date.now(), updatedAt: now || Date.now() };
+  return { enabled: false, cardTier: "", cardLimit: 0, usedAmount: 0, billingAmount: 0, dueAt: 0, lastBilledAt: 0, lastOverdueProcessedAt: 0, overdue: false, overdueCount: 0, suspended: false, autoPayEnabled: false, autoPayMode: "off", autoPayLastProcessedAt: 0, createdAt: now || Date.now(), updatedAt: now || Date.now() };
 }
 function normalizeCard(raw, now) {
   const c = (raw && typeof raw === "object") ? raw : {};
@@ -157,8 +171,28 @@ function normalizeCard(raw, now) {
     overdue: !!c.overdue,
     overdueCount: Math.max(0, int(c.overdueCount)),
     suspended: !!c.suspended,
+    autoPayEnabled: !!c.autoPayEnabled,
+    autoPayMode: c.autoPayMode || (c.autoPayEnabled ? "full" : "off"),
+    autoPayLastProcessedAt: int(c.autoPayLastProcessedAt),
     createdAt: int(c.createdAt) || now,
     updatedAt: now,
+  };
+}
+// 카드 최소 납부액 = max(청구액 10%, 100만), 청구액 초과 불가
+export function cardMinPay(card) {
+  const owed = Math.max(int(card && card.billingAmount), int(card && card.usedAmount));
+  if (owed <= 0) return 0;
+  return Math.min(owed, Math.max(Math.floor(owed * 0.10), 1000000));
+}
+// 현재/기본 금리(이벤트 반영) — UI 비교용
+export function rateInfo(bank) {
+  const ef = eventEffects(activeEvent);
+  return {
+    free: { base: FREE_RATE_DAY, now: FREE_RATE_DAY * ef.depositMult },
+    loan: { base: LOAN_RATE_DAY, now: LOAN_RATE_DAY * ef.loanMult },
+    vipVault: { base: vipVaultRate((bank && bank.vipTier) || "NORMAL") || VIP_VAULT_RATE_DAY, now: (vipVaultRate((bank && bank.vipTier) || "NORMAL") || VIP_VAULT_RATE_DAY) + ef.vipVaultAdd },
+    eventActive: !!(activeEvent && (ef.depositMult !== 1 || ef.loanMult !== 1 || ef.vipVaultAdd > 0 || ef.insExtraDisc > 0 || ef.investMinAdd || ef.investMaxAdd || ef.vipGainMult !== 1 || ef.cardCashbackVip > 0)),
+    ef,
   };
 }
 
@@ -355,14 +389,38 @@ export async function loadState(uid) {
 
   // 카드 청구/미납 처리(접속 시 1회, dueAt 기준 중복 방지)
   const cardRes = processCard(bank, now);
+  const cardMsgs = cardRes.msgs.slice();
   if (cardRes.changed) {
     if (cardRes.creditDelta) { bank.creditScore = clampScore(bank.creditScore + cardRes.creditDelta); bank.creditGrade = gradeFromScore(bank.creditScore); }
     await update(bankRef(uid), pruneBank(bank));
     for (const t of cardRes.tx) await addTx(uid, t);
   }
 
+  // 카드 자동납부(접속 시 1회, dueAt 기준 중복 방지) — 현금이 충분하면 전액 자동 납부
+  const cc = bank.card;
+  if (cc && cc.enabled && cc.autoPayEnabled && int(cc.dueAt) > 0 && now >= int(cc.dueAt) && int(cc.autoPayLastProcessedAt) < int(cc.dueAt)) {
+    const dueKey = int(cc.dueAt);
+    const owed = Math.max(int(cc.billingAmount), int(cc.usedAmount));
+    if (owed > 0) {
+      if (int(cash) >= owed) {
+        const r = await runTransaction(cashRef(uid), (cv) => { const base = (cv == null) ? int(cash) : int(cv); if (base < owed) return; return base - owed; });
+        if (r.committed) {
+          cc.usedAmount = 0; cc.billingAmount = 0; cc.overdue = false; cc.dueAt = 0; cc.lastBilledAt = 0; cc.lastOverdueProcessedAt = 0; cc.suspended = false; cc.autoPayLastProcessedAt = now;
+          bank.creditScore = clampScore(bank.creditScore + 1); bank.creditGrade = gradeFromScore(bank.creditScore);
+          await update(bankRef(uid), pruneBank(bank));
+          await addTx(uid, txItem("card_pay", "카드 자동납부", -owed, cash, cash - owed, "전액 자동납부"));
+          cardMsgs.push({ type: "card", title: "카드 자동납부 완료", body: `결제일에 청구액 ${won(owed)}이 자동으로 납부되었습니다.`, relatedId: "cardautopay-" + dueKey });
+        }
+      } else {
+        cc.autoPayLastProcessedAt = dueKey; // 이번 dueAt 자동납부 시도 기록(중복 실패 알림 방지)
+        await update(bankRef(uid), { "card/autoPayLastProcessedAt": dueKey });
+        cardMsgs.push({ type: "card", title: "카드 자동납부 실패", body: `현금 부족으로 자동납부에 실패했습니다. 청구액 ${won(owed)}을 수동 납부해 주세요.`, relatedId: "cardautofail-" + dueKey });
+      }
+    }
+  }
+
   // 이벤트 알림 생성(중복 방지: relatedId) + 만료 보험 정리 + 카드 알림 — 접속 시 1회
-  msgs = await processBankEvents(uid, bank, prevTier, msgs, now, cardRes.msgs);
+  msgs = await processBankEvents(uid, bank, prevTier, msgs, now, cardMsgs);
 
   // 알림 50개 초과 정리: 읽은 오래된 알림부터 삭제(unread 보존). 실패해도 진행.
   try {
@@ -949,6 +1007,16 @@ export async function restoreCard(uid, state) {
   await addTx(uid, txItem("card_restore", "카드 사용 복구", 0, int(state.cash), int(state.cash), "정지 해제"));
   await addMessage(uid, { type: "card", title: "카드 사용 복구", body: "STONK Card 사용이 복구되었습니다.", relatedId: "cardrestore-" + Date.now() });
   return "카드 사용이 복구되었습니다";
+}
+
+// 카드 자동납부 설정 토글
+export async function setAutoPay(uid, enabled, mode, state) {
+  const c = state.bank && state.bank.card;
+  if (!c || !c.enabled) throw new Error("먼저 카드를 발급하세요.");
+  const m = enabled ? (mode === "minimum" ? "minimum" : "full") : "off";
+  await update(bankRef(uid), { "card/autoPayEnabled": !!enabled, "card/autoPayMode": m, "card/updatedAt": Date.now() });
+  await addTx(uid, txItem("card_restore", enabled ? "카드 자동납부 켜짐" : "카드 자동납부 꺼짐", 0, int(state.cash), int(state.cash), `모드 ${m}`));
+  return enabled ? "자동납부가 켜졌습니다(전액 자동납부)." : "자동납부가 꺼졌습니다.";
 }
 
 // 관리자 투자 강제정산(Bank 모듈 외부에서도 동일 공식 사용 가능하도록 export)

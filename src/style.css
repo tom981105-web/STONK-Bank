@@ -294,3 +294,40 @@ b { font-variant-numeric: tabular-nums; }
 .bk-modal-btns { display: flex; gap: 8px; margin-top: 12px; }
 .bk-modal-btns .bk-btn { flex: 1; }
 @media (prefers-reduced-motion: reduce) { .bk-event-banner, .bk-modal-dim, .sc-gauge span { animation: none; transition: none; } }
+
+/* ════════ v2.95 ════════ */
+/* 카드 납부 미리보기 */
+#cardPayPreview { display: block; margin: -2px 0 8px; font-size: 12px; }
+
+/* 카드 발급 플립 연출 */
+.bk-flip-dim { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 420; }
+.bk-flip { text-align: center; }
+.bk-flip p { margin-top: 14px; font-weight: 800; color: var(--gold); }
+.bk-flip-inner { width: 260px; height: 160px; margin: 0 auto; position: relative; transform-style: preserve-3d; transition: transform .7s cubic-bezier(.2,.7,.2,1); transform: rotateY(0deg); }
+.bk-flip-dim.go .bk-flip-inner { transform: rotateY(180deg); }
+.bk-flip-front, .bk-flip-back { position: absolute; inset: 0; backface-visibility: hidden; border-radius: 14px; }
+.bk-flip-front { background: linear-gradient(135deg,#2b3346,#12151d); display: grid; place-items: center; border: 1px solid #333b4d; }
+.bk-flip-front span { font-weight: 900; letter-spacing: 2px; color: #8b97a8; }
+.bk-flip-back { transform: rotateY(180deg); }
+.bk-flip-back .stonk-card { margin: 0; min-height: 160px; }
+
+/* 이벤트 효과 카드 */
+.bk-card.event-fx { border-color: rgba(91,140,255,.3); background: linear-gradient(135deg, rgba(91,140,255,.06), rgba(54,211,153,.03)); }
+.bk-card.event-fx.ev-caution, .bk-card.event-fx.ev-highrate { border-color: rgba(245,177,74,.4); }
+.bk-card.event-fx.ev-bust { border-color: rgba(242,86,106,.4); }
+
+/* 금고 시각 오브젝트 */
+.vault-card.black { border-color: #3a2f12; }
+.vaults { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vault { padding: 14px 10px; border-radius: 12px; text-align: center; border: 1px solid var(--border); background: var(--bg2); }
+.vault .vault-ico { font-size: 26px; filter: saturate(.7); transition: transform .2s; }
+.vault.lv-2 .vault-ico { font-size: 30px; } .vault.lv-3 .vault-ico { font-size: 34px; filter: none; } .vault.lv-4 .vault-ico { font-size: 38px; filter: drop-shadow(0 0 8px rgba(232,200,122,.5)); }
+.vault span { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.vault b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+.vault small { display: block; font-size: 11px; color: var(--text2); }
+.vault.locked { opacity: .6; }
+.vault-card.black .vault.lv-4 { background: linear-gradient(135deg, rgba(240,212,136,.08), #14151c); }
+
+/* 투자 진행률 */
+.inv-progress { height: 5px; border-radius: 999px; background: var(--bg2); overflow: hidden; margin-top: 6px; }
+.inv-progress span { display: block; height: 100%; background: linear-gradient(90deg,#5b8cff,#36d399); }
